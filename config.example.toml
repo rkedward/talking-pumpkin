@@ -1,0 +1,83 @@
+# Talking pumpkin settings. Copy to config.toml (the installer does) and change what you need.
+# Anything left out uses the defaults listed in config.py.
+
+[claude]
+model = "claude-opus-5-5"      # "claude-haiku-4-5" answers faster
+effort = "low"
+
+[camera]
+source = "auto"                # auto (Pi camera, else USB) | picamera | usb | file:/path/video.mp4
+hfov_deg = 66                  # Camera Module 3: 66, Camera Module 3 Wide: 102
+flip_horizontal = false        # set true if the camera is mounted upside down (with flip_vertical)
+flip_vertical = false
+
+[detector]
+min_height = 0.25              # lower (e.g. 0.15) if kids stand far from the camera
+
+[visit]
+max_turns = 5
+max_visit_s = 90
+
+[mic]
+device = "ReSpeaker"           # part of the mic's name; falls back to the default mic
+
+[stt]
+model = "base.en"              # tiny.en = faster, small.en = more accurate
+
+[tts]
+engine = "piper"               # piper | elevenlabs | espeak | none
+piper_voice = "models/voices/en_US-ryan-medium.onnx"
+pitch_semitones = -2.0
+# For ElevenLabs: engine = "elevenlabs", put ELEVENLABS_API_KEY=... in .env, and set:
+# elevenlabs_voice_id = "your-voice-id"
+
+[doa]
+enabled = true
+offset_deg = 0                 # see README: "Point the mic array"
+flip = false
+
+[props]
+eyebrows = "none"              # none | pca9685 | gpio
+brow_left = 0                  # PCA9685 channels (or GPIO pins with eyebrows = "gpio")
+brow_right = 1
+fog_pin = 0                    # e.g. 17 for a relay on GPIO17; 0 = no fog machine
+lights_pin = 0                 # e.g. 27; 0 = no extra lights
+
+[window]
+enabled = false                # true when a second projector is on the Pi's second HDMI port
+where = "the front door window behind you"   # how the pumpkin tells kids where to look
+builtins = true                # built-in ghost, shadow eyes and skeleton hand (plus your clips in static/creatures/)
+max_summons = 1                # creatures per visit
+gaze = [-1.0, -0.3]            # where the pumpkin glances when it summons; flip the sign if the window is on the other side
+creature_pitch = -7.0          # creature voice: deeper than the pumpkin
+
+# Several windows (e.g. smart projectors on Wi-Fi in different rooms): one table per window. The name goes in
+# that projector's address, http://<pi address>:8000/window.html?w=<name>. Without these tables there is
+# one window called "door" on the Pi's second HDMI port.
+# [window.screens.door]
+# where = "the front door window behind you"
+# gaze = [-1.0, -0.3]
+# hdmi = true                  # this one is plugged into the Pi's second HDMI port
+# [window.screens.garage]
+# where = "the garage window on your left"
+# gaze = [-1.0, 0.0]
+# [window.screens.upstairs]
+# where = "the upstairs window, way up high"
+# gaze = [0.0, -1.0]
+
+[face]
+hide_when_idle = false         # true: the pumpkin stays dark until someone arrives or the doorbell rings
+
+[home]
+enabled = false                # doorbell in / webhooks out for Home Assistant etc. (see README)
+key = ""                       # shared secret the doorbell request must send as {"key": "..."}
+butler = "Knuckles"            # assistant who answers the door
+# [home.webhooks]
+# doorbell = "http://127.0.0.1:8123/api/webhook/pumpkin_doorbell"
+# visit_start = ""
+# visit_end = ""
+# summon = ""
+
+[web]
+host = "127.0.0.1"             # "0.0.0.0" to open the debug panel/remote from a phone on your Wi-Fi
+port = 8000

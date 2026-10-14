@@ -1,0 +1,18 @@
+# Put your creature video clips in this folder (MP4/WebM, black background, 720p plays smoothest on the Pi).
+# The file name becomes the creature's name, e.g. "skeleton-knocking.mp4" -> "skeleton knocking".
+# The creatures are the pumpkin's assistants. Optionally give each clip a name and describe its
+# character so the pumpkin knows who it is summoning (key = file name without extension):
+#
+# [skeleton-knocking]
+# name = "Bones"
+# description = "Bones, Jack's skeleton doorman, who knocks on the door glass from inside the house"
+# windows = ["door"]        # only show this clip in these windows (names from [window.screens.*]); default: any
+# voice = "en_US-joe-medium" # its own Piper voice (downloaded into models/voices/); default: creature_voice
+# pitch = -9.0              # semitones (negative = deeper); default: creature_pitch
+# speed = 1.4               # >1 is slower; default: creature_length_scale
+# chorus = [-5.0, 4.0]      # optional: extra copies of the voice at these pitches, for a crowd
+#
+# [witch-cauldron]
+# name = "Hazel the witch"
+# description = "a cackling witch stirring a cauldron"
+# has_audio = true          # the clip has its own sound, played by that window's projector (the mic pauses while it plays)
