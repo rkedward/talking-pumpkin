@@ -27,7 +27,13 @@ if [ "$DEBUG_SCREEN" != "off" ] && command -v xrandr >/dev/null; then
   HDMIS=$(echo "$CONNECTED" | grep -v '^DSI' || true)
   if [ -n "$DSI" ] && [ -n "$HDMIS" ]; then
     FIRST=$(echo "$HDMIS" | head -n 1)
-    xrandr --output "$FIRST" --auto --primary --pos 0x0 --output "$DSI" --auto --below "$FIRST" || true
+    # 1080p is plenty for the face (and the projector's native size). Ultra-wide monitors' preferred modes can fail
+    # once the DSI screen shares the display, so use 1920x1080 when the output offers it.
+    MODE=(--auto)
+    if xrandr | awk -v o="$FIRST" '$1 == o {on = 1; next} /^[^ ]/ {on = 0} on && $1 == "1920x1080" {f = 1} END {exit !f}'; then
+      MODE=(--mode 1920x1080 --rate 60)
+    fi
+    xrandr --output "$FIRST" "${MODE[@]}" --primary --pos 0x0 --output "$DSI" --auto --below "$FIRST" || true
     sleep 1
   fi
 fi
