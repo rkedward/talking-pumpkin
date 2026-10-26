@@ -303,6 +303,8 @@ class Speaker:
         # Output buffer in seconds. A small buffer underruns (choppy speech) whenever the camera, speech
         # recognition or the next sentence's synthesis keeps the CPU busy; the mouth timing allows for it.
         self.latency = float(cfg.get("output_latency", 0.25))
+        # Each sentence is synthesized on its own, which trims the natural pause after it; add one back.
+        self.pause = float(cfg.get("sentence_pause", 0.35))
 
     def speak(self, text, on_level, on_sentence=None, should_stop=lambda: False):
         sentences = _sentences(text)
@@ -314,6 +316,8 @@ class Speaker:
                     break
                 try:
                     audio, rate = self.tts.synth(s) if self.tts else (None, None)
+                    if audio is not None and len(audio) and self.pause > 0:
+                        audio = np.concatenate([audio, np.zeros(int(rate * self.pause), np.int16)])
                 except Exception as exc:
                     self.log(f"voice error: {exc}")
                     audio, rate = None, None
