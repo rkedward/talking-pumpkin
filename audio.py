@@ -300,6 +300,9 @@ class Speaker:
     def __init__(self, tts, cfg, mic, log):
         self.tts, self.mic, self.log = tts, mic, log
         self.device = _find_device(cfg["output_device"], "output")
+        # Output buffer in seconds. A small buffer underruns (choppy speech) whenever the camera, speech
+        # recognition or the next sentence's synthesis keeps the CPU busy; the mouth timing allows for it.
+        self.latency = float(cfg.get("output_latency", 0.25))
 
     def speak(self, text, on_level, on_sentence=None, should_stop=lambda: False):
         sentences = _sentences(text)
@@ -342,7 +345,7 @@ class Speaker:
         levels = np.clip(rms / ref, 0, 1) ** 0.6
         self.mic.mute_for(len(audio) / rate + 0.4)   # don't listen to ourselves
         with sd.OutputStream(samplerate=rate, channels=1, dtype="int16", device=self.device,
-                             blocksize=block, latency="low") as stream:
+                             blocksize=block, latency=self.latency) as stream:
             delay = int(round((stream.latency or 0) / self.BLOCK_S))  # blocks written but not yet heard
             for i in range(n_blocks):
                 if should_stop():
