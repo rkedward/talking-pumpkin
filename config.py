@@ -117,6 +117,7 @@ DEFAULTS = {
         "host": "127.0.0.1",          # 0.0.0.0 lets a phone on your Wi-Fi open the debug panel / remote
                                       # (switched on automatically for Wi-Fi window projectors and home automation)
         "port": 8000,
+        "debug_screen": "auto",       # camera debug view on a small DSI screen: "auto", an output like "DSI-1", or "off"
     },
 }
 

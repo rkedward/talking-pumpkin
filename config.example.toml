@@ -81,3 +81,4 @@ butler = "Knuckles"            # assistant who answers the door
 [web]
 host = "127.0.0.1"             # "0.0.0.0" to open the debug panel/remote from a phone on your Wi-Fi
 port = 8000
+debug_screen = "auto"           # camera debug view on a small DSI touchscreen if one is connected; "off" to disable

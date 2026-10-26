@@ -1,24 +1,47 @@
 #!/usr/bin/env bash
 # Opens the pumpkin face full screen on the first display and, if a side-show window is set to hdmi, the creature
-# window on the second display (the Pi 5's second HDMI port). Started at login by install_pi.sh.
+# window on the second display (the Pi 5's second HDMI port). If a small DSI touchscreen is connected, the camera
+# debug view (camera picture with boxes, voice direction, log) opens on it. Started at login by install_pi.sh.
 cd "$(dirname "$0")"
 PY=.venv/bin/python; [ -x "$PY" ] || PY=python3
 # WINDOW = name of the window on the Pi's 2nd HDMI port, or "-" when the side show is off or all windows are on Wi-Fi
-read -r PORT WINDOW SCREEN_X < <("$PY" -c "
+read -r PORT WINDOW SCREEN_X DEBUG_SCREEN < <("$PY" -c "
 import config; c = config.load(); w = c['window']
 hdmi = [n for n, s in config.screens(w).items() if s['hdmi']] if w['enabled'] else []
-print(c['web']['port'], hdmi[0] if hdmi else '-', int(w['screen_x']))" 2>/dev/null || echo "8000 - 0")
+print(c['web']['port'], hdmi[0] if hdmi else '-', int(w['screen_x']), c['web'].get('debug_screen') or 'off')" 2>/dev/null || echo "8000 - 0 auto")
 URL="http://localhost:${PORT}"
 for _ in $(seq 60); do curl -s -o /dev/null "$URL/" && break; sleep 1; done
 BROWSER=$(command -v chromium || command -v chromium-browser)
 FLAGS=(--kiosk --noerrdialogs --disable-infobars --no-first-run --incognito --disable-session-crashed-bubble
        --check-for-update-interval=31536000 --autoplay-policy=no-user-gesture-required)
 
+# Small DSI screen for the camera debug view: keep the HDMI projector(s) at the top left (the face opens at 0,0)
+# and put the DSI screen to their right. debug_screen under [web]: "auto" (any DSI screen), an output name
+# such as "DSI-1", or "off".
+DSI=""
+if [ "$DEBUG_SCREEN" != "off" ] && command -v xrandr >/dev/null; then
+  CONNECTED=$(xrandr | awk '$2 == "connected" {print $1}')
+  if [ "$DEBUG_SCREEN" = "auto" ]; then DSI=$(echo "$CONNECTED" | grep '^DSI' | head -n 1)
+  else DSI=$(echo "$CONNECTED" | grep -x "$DEBUG_SCREEN" || true); fi
+  HDMIS=$(echo "$CONNECTED" | grep -v '^DSI' || true)
+  if [ -n "$DSI" ] && [ -n "$HDMIS" ]; then
+    FIRST=$(echo "$HDMIS" | head -n 1)
+    LAST=$(echo "$HDMIS" | tail -n 1)
+    xrandr --output "$FIRST" --auto --primary --pos 0x0 || true
+    xrandr --output "$DSI" --auto --right-of "$LAST" || true
+    sleep 1
+  fi
+fi
+
 if [ "$WINDOW" != "-" ]; then
   # x position of the second monitor, from xrandr (e.g. "1: +HDMI-A-2 1920/530x1080/300+1920+0  HDMI-A-2")
   if [ "$SCREEN_X" = "0" ] && command -v xrandr >/dev/null; then
-    SCREEN_X=$(xrandr --listmonitors | awk 'NR>1 {split($3, a, "+"); if (a[2] > 0) {print a[2]; exit}}')
+    SCREEN_X=$(xrandr --listmonitors | awk 'NR>1 && $4 !~ /^DSI/ {split($3, a, "+"); if (a[2] > 0) {print a[2]; exit}}')
   fi
   "$BROWSER" "${FLAGS[@]}" --user-data-dir=/tmp/pumpkin-window --window-position="${SCREEN_X:-1920},0" "$URL/window.html?w=$WINDOW" &
+fi
+if [ -n "$DSI" ]; then
+  DSI_X=$(xrandr --listmonitors | awk -v o="$DSI" '$4 == o {split($3, a, "+"); print a[2]; exit}')
+  "$BROWSER" "${FLAGS[@]}" --user-data-dir=/tmp/pumpkin-debug --window-position="${DSI_X:-0},0" "$URL/?debug" &
 fi
 exec "$BROWSER" "${FLAGS[@]}" --user-data-dir=/tmp/pumpkin-face --window-position=0,0 "$URL/"
