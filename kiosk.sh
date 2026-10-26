@@ -16,7 +16,8 @@ FLAGS=(--kiosk --noerrdialogs --disable-infobars --no-first-run --incognito --di
        --check-for-update-interval=31536000 --autoplay-policy=no-user-gesture-required)
 
 # Small DSI screen for the camera debug view: keep the HDMI projector(s) at the top left (the face opens at 0,0)
-# and put the DSI screen to their right. debug_screen under [web]: "auto" (any DSI screen), an output name
+# and put the DSI screen below the first one (beside it can push the desktop past the Pi's 4096-pixel limit
+# with a wide monitor). debug_screen under [web]: "auto" (any DSI screen), an output name
 # such as "DSI-1", or "off".
 DSI=""
 if [ "$DEBUG_SCREEN" != "off" ] && command -v xrandr >/dev/null; then
@@ -26,9 +27,7 @@ if [ "$DEBUG_SCREEN" != "off" ] && command -v xrandr >/dev/null; then
   HDMIS=$(echo "$CONNECTED" | grep -v '^DSI' || true)
   if [ -n "$DSI" ] && [ -n "$HDMIS" ]; then
     FIRST=$(echo "$HDMIS" | head -n 1)
-    LAST=$(echo "$HDMIS" | tail -n 1)
-    xrandr --output "$FIRST" --auto --primary --pos 0x0 || true
-    xrandr --output "$DSI" --auto --right-of "$LAST" || true
+    xrandr --output "$FIRST" --auto --primary --pos 0x0 --output "$DSI" --auto --below "$FIRST" || true
     sleep 1
   fi
 fi
@@ -41,7 +40,7 @@ if [ "$WINDOW" != "-" ]; then
   "$BROWSER" "${FLAGS[@]}" --user-data-dir=/tmp/pumpkin-window --window-position="${SCREEN_X:-1920},0" "$URL/window.html?w=$WINDOW" &
 fi
 if [ -n "$DSI" ]; then
-  DSI_X=$(xrandr --listmonitors | awk -v o="$DSI" '$4 == o {split($3, a, "+"); print a[2]; exit}')
-  "$BROWSER" "${FLAGS[@]}" --user-data-dir=/tmp/pumpkin-debug --window-position="${DSI_X:-0},0" "$URL/?debug" &
+  read -r DSI_X DSI_Y < <(xrandr --listmonitors | awk -v o="$DSI" '$4 == o {split($3, a, "+"); print a[2], a[3]; exit}')
+  "$BROWSER" "${FLAGS[@]}" --user-data-dir=/tmp/pumpkin-debug --window-position="${DSI_X:-0},${DSI_Y:-0}" "$URL/?debug" &
 fi
 exec "$BROWSER" "${FLAGS[@]}" --user-data-dir=/tmp/pumpkin-face --window-position=0,0 "$URL/"
