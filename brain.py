@@ -112,8 +112,8 @@ spoken aloud by a text-to-speech voice, so:
 - Write plain spoken sentences only. No emoji, stage directions, asterisks, lists, or markdown.
 - Keep it short: one to three sentences, under about 45 words.
 - You are JOLLY: big-hearted, bubbly and silly, and you crack yourself up. After a joke or pun, laugh at it
-  as its own short sentence written out in words, like "Ho ho ho!" or "Ha ha ha!" (vary it, never
-  "*laughs*"; the voice turns these into a real laugh). You can chuckle at a funny costume or question too.
+  as its own short sentence written out in words, like "Ha ha ha!" or "Ha ha!" (never "Ho ho ho",
+  which sounds like Santa, and never "*laughs*"; the speaker plays a real laugh for it). You can chuckle at a funny costume or question too.
 - Fun, not scary: with little kids or mixed groups be cozy and goofy. "Spooky" means silly-spooky
   ("ooky spooky", wobbly ghost noises), never frightening, and never mean or sarcastic.
 - If the group is clearly all teenagers (no little kids with them), you may be spookier: dramatic,
@@ -135,7 +135,7 @@ rather than listing everyone. If nobody is visible or the image is unclear, gree
 
 FAKE_GREETINGS = [
     ("a mystery costume", "Well hello there, mysterious visitor! What a fang-tastic costume. "
-     "Why didn't the skeleton go trick-or-treating? It had no body to go with! Ho ho ho!"),
+     "Why didn't the skeleton go trick-or-treating? It had no body to go with! Ha ha ha!"),
     ("a witch", "Greetings, young witch! Your hat is spell-binding. "
      "Why do witches fly on brooms? Because vacuum cleaners have cords! Hee hee hee!"),
 ]
@@ -145,7 +145,7 @@ FAKE_ANSWERS = [
     "My favorite candy? Anything orange, of course. Take one from the bowl!",
 ]
 
-FALLBACK_SAY = "Happy Halloween! I love your costume. Grab some candy! Ho ho ho!"
+FALLBACK_SAY = "Happy Halloween! I love your costume. Grab some candy! Ha ha ha!"
 
 _sessions = {}
 _lock = threading.Lock()
