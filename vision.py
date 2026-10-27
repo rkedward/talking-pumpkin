@@ -38,9 +38,11 @@ class Camera:
         self.cfg, self.log = cfg, log
         self.frame = None
         self.frame_id = 0
+        self.frame_time = 0.0
         self._lock = threading.Lock()
         self._open()
         threading.Thread(target=self._loop, daemon=True, name="camera").start()
+        threading.Thread(target=self._watchdog, daemon=True, name="camera-watchdog").start()
 
     def _open(self):
         src = str(self.cfg["source"])
@@ -79,30 +81,60 @@ class Camera:
 
     def _loop(self):
         while True:
-            frame = None
-            if self.picam is not None:
-                frame = self.picam.capture_array()
-            elif self.cap is not None:
-                ok, frame = self.cap.read()
-                if not ok and self.file_fps:  # loop test videos
-                    self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                    continue
-                if self.file_fps:
-                    time.sleep(1 / self.file_fps)
-            else:
-                time.sleep(0.5)
+            try:
+                self._grab()
+            except Exception as exc:   # never let the camera thread die silently
+                self.log(f"camera error: {type(exc).__name__}: {exc}")
+                time.sleep(1)
+
+    def _grab(self):
+        frame = None
+        if self.picam is not None:
+            frame = self.picam.capture_array()
+        elif self.cap is not None:
+            ok, frame = self.cap.read()
+            if not ok and self.file_fps:  # loop test videos
+                self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                return
+            if self.file_fps:
+                time.sleep(1 / self.file_fps)
+        else:
+            time.sleep(0.5)
+            return
+        if frame is None:
+            return
+        if frame.ndim == 3 and frame.shape[2] == 4:
+            frame = frame[:, :, :3]
+        if self.cfg["flip_horizontal"]:
+            frame = cv2.flip(frame, 1)
+        if self.cfg["flip_vertical"]:
+            frame = cv2.flip(frame, 0)
+        with self._lock:
+            self.frame = frame
+            self.frame_id += 1
+            self.frame_time = time.time()
+
+    def _watchdog(self):
+        """If the Pi camera stops delivering frames, restart it."""
+        while True:
+            time.sleep(2)
+            if self.picam is None or not self.frame_time or time.time() - self.frame_time < 6:
                 continue
-            if frame is None:
-                continue
-            if frame.ndim == 3 and frame.shape[2] == 4:
-                frame = frame[:, :, :3]
-            if self.cfg["flip_horizontal"]:
-                frame = cv2.flip(frame, 1)
-            if self.cfg["flip_vertical"]:
-                frame = cv2.flip(frame, 0)
-            with self._lock:
-                self.frame = frame
-                self.frame_id += 1
+            self.log("camera: no frames for 6 s, restarting the camera")
+            try:
+                self.picam.stop()
+                self.picam.start()
+            except Exception as exc:
+                self.log(f"camera: restart failed ({type(exc).__name__}: {exc}); reopening")
+                try:
+                    self.picam.close()
+                except Exception:
+                    pass
+                try:
+                    self._open()
+                except Exception as exc2:
+                    self.log(f"camera: reopen failed ({exc2})")
+            self.frame_time = time.time()
 
     def read(self):
         with self._lock:

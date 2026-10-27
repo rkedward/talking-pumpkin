@@ -87,6 +87,8 @@ def serve(cfg, hub, app):
                 return self._events()
             if self.path.startswith("/video.mjpg"):
                 return self._mjpeg()
+            if self.path.startswith("/frame.jpg"):
+                return self._frame()
             if self.path.startswith("/api/status"):
                 return self._json(200, app.status())
             return super().do_GET()
@@ -130,6 +132,22 @@ def serve(cfg, hub, app):
                 pass
             finally:
                 hub.unsubscribe(q)
+
+        def _frame(self):
+            """One camera frame. The debug panel polls this; a long-lived MJPEG stream tends to stall in
+            browsers after a while and never recovers."""
+            jpg = app.debug_jpeg()
+            if not jpg:
+                self.send_response(503)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(jpg)))
+            self.end_headers()
+            self.wfile.write(jpg)
 
         def _mjpeg(self):
             self.send_response(200)

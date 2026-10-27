@@ -94,9 +94,22 @@ requestAnimationFrame(frame);
 // ---- Controls ----
 const post = (cmd, body = {}) => fetch(`api/${cmd}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
+// Camera view: fetch one frame at a time (only while the panel is open). Each frame asks for the next, and a
+// timer restarts the chain if a frame ever gets lost, so the picture can't freeze for good.
+let videoTimer = null, videoLast = 0;
+function nextFrame() {
+  clearTimeout(videoTimer);
+  if (!$("debug").classList.contains("on")) return;
+  videoLast = Date.now();
+  $("video").src = `frame.jpg?t=${videoLast}`;
+  videoTimer = setTimeout(nextFrame, 3000);   // watchdog: nothing came back in 3 s, ask again
+}
+$("video").addEventListener("load", () => { clearTimeout(videoTimer); videoTimer = setTimeout(nextFrame, 120); });
+$("video").addEventListener("error", () => { clearTimeout(videoTimer); videoTimer = setTimeout(nextFrame, 1000); });
+
 function toggleDebug() {
   const on = $("debug").classList.toggle("on");
-  $("video").src = on ? "video.mjpg" : "";   // only stream the camera while the panel is open
+  if (on) nextFrame(); else { clearTimeout(videoTimer); $("video").removeAttribute("src"); }
 }
 
 document.addEventListener("keydown", (e) => {
