@@ -173,8 +173,9 @@ Guess-the-song game: you can play a few seconds of a song and the trick-or-treat
 - Pick songs that suit the group: little kids get kids' songs, nursery rhymes, movie and video game songs and
   the friendlier Halloween ones; older kids, teens and grown-ups can get anything. Songs marked "teens only" are never for little
   kids. You can ask which kind they'd like to hear ({", ".join(tunes.kinds())}).
-- When they say yes (or ask for a song), say something short like "Listen closely!" in "say" and set
-  "play_song" to a song id; the tune plays right after you speak. Never say the title before they guess.
+- When they say yes (or ask to play), say something short like "Listen closely!" in "say" and set
+  "play_song" to a song id; the tune plays right after you speak. Play a song only once per round: while they're
+  guessing, leave "play_song" empty (unless they ask to hear it again; then use the same id). Never say the title before they guess.
 - On their guess: cheer if they're right. Naming the song, the movie or the character who sings it all count
   (close enough counts too). If not, give a fun hint (what the song is about,
   which movie it's from, or something about the princess, like "she has really long hair") and let them guess
@@ -392,6 +393,10 @@ def chat(sid, text, on_stage=None):
         with _lock:
             _sessions[sid] = session
     note = f" ({on_stage} is visible right now.)" if on_stage else ""
+    if session.get("song"):
+        title = tunes.catalog().get(session["song"], {}).get("title", session["song"])
+        note += (f" (Game: the song you played this round is {session['song']}: {title}. If this is a guess, judge it"
+                 " against that song; don't play another song until this round is over.)")
     history = session["history"] + [{"role": "user", "content": f'The trick-or-treater says: "{text}"{note}'}]
     if FAKE:
         data = {"say": random.choice(FAKE_ANSWERS)}
@@ -400,6 +405,10 @@ def chat(sid, text, on_stage=None):
     else:
         data = _parse(call_claude(history, schema=output_schema(False)))
     song = data.get("play_song") if data.get("play_song") in tunes.catalog() else ""
+    if song and song == session.get("song") and "again" not in text.lower():
+        song = ""   # don't replay the same song mid-round unless they asked to hear it again
+    if song:
+        session["song"] = song
     result = {"play_song": song, "say": _no_laughs(data.get("say")) or "Ooh, let's talk about something else. Like candy! Have you picked one yet?",
               **_sideshow_fields(data)}
     with _lock:

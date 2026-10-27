@@ -30,7 +30,7 @@ def find_preview(title, artist):
     key = title.lower().split(" (")[0].replace("'", "").replace(",", "")
 
     bad = ("karaoke", "instrumental", "live", "remix", "cover", "tribute", "version", "made famous", "lullaby",
-           "acoustic", "sped up", "slowed")
+           "acoustic", "sped up", "slowed", "reprise")
 
     def score(x):
         name = x.get("trackName", "").lower().replace("'", "").replace(",", "")
