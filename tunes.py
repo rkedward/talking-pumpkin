@@ -101,6 +101,9 @@ REAL = {
     "bibbidi": ("Bibbidi-Bobbidi-Boo (Cinderella)", "Verna Felton", "Disney princess songs", False),
     "once_upon_dream": ("Once Upon a Dream (Sleeping Beauty)", "Mary Costa", "Disney princess songs", False),
     "someday_prince": ("Someday My Prince Will Come (Snow White)", "Adriana Caselotti", "Disney princess songs", False),
+    "belle": ("Belle (Beauty and the Beast)", "Paige O'Hara", "Disney princess songs", False),
+    "dream_wish": ("A Dream Is a Wish Your Heart Makes (Cinderella)", "Ilene Woods", "Disney princess songs", False),
+    "whistle": ("Whistle While You Work (Snow White)", "Adriana Caselotti", "Disney princess songs", False),
     "touch_the_sky": ("Touch the Sky (Brave)", "Julie Fowlis", "Disney princess songs", False),
 }
 CLIPS = ROOT / "sounds" / "songs"   # <id>.wav plus songs.json, written by fetch_songs.py
