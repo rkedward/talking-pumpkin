@@ -97,7 +97,8 @@ class Pumpkin:
         self.log(f"face page on http://localhost:{port}")
         for n in wifi_windows:
             self.log(f"window '{n}': open http://{lan_ip()}:{port}/window.html?w={n} on its projector")
-        self.log("claude: fake mode (canned replies)" if cfg["claude"]["fake"] else f"claude: {cfg['claude']['model']}")
+        self.log("brain: fake mode (canned replies)" if cfg["claude"]["fake"]
+                 else f"brain: {cfg['claude']['provider']} {cfg['claude']['model']}")
         self.show = None   # set below; the web panel can ask for status while the rest is still loading
         self.props = Props(cfg["props"], self.log)
         self.vision = Vision(cfg["camera"], cfg["detector"], self.log)

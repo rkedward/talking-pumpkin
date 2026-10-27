@@ -1,23 +1,32 @@
-"""Claude: costume recognition, greeting and Q&A. Holds per-visit conversation history."""
+"""The pumpkin's brain (Claude or OpenAI): costume recognition, greeting and Q&A. Holds per-visit
+conversation history."""
 
 import json
+import os
 import random
 import threading
 import time
+import urllib.error
+import urllib.request
 import uuid
 
 SESSION_TTL = 15 * 60
 MODEL = "claude-opus-5-5"
 EFFORT = "low"
 FAKE = False
+PROVIDER = "claude"      # claude | openai
+OPENAI_MODEL = "gpt-5-mini"
+OPENAI_REASONING = "minimal"
 CREATURES = []          # [{"name": ..., "description": ..., "windows": [...]}] that can appear in a window
 WINDOWS = {}            # window name -> where it is, as the pumpkin tells kids ("the front door window behind you")
 ONLINE = lambda: list(WINDOWS)   # windows whose projector is switched on right now
 
 
 def configure(cfg, creatures=(), windows=None, online=None):
-    global MODEL, EFFORT, FAKE, CREATURES, WINDOWS, ONLINE
+    global MODEL, EFFORT, FAKE, CREATURES, WINDOWS, ONLINE, PROVIDER, OPENAI_MODEL, OPENAI_REASONING
     MODEL, EFFORT, FAKE = cfg["model"], cfg["effort"], bool(cfg["fake"])
+    PROVIDER = cfg.get("provider", "claude")
+    OPENAI_MODEL, OPENAI_REASONING = cfg.get("openai_model", OPENAI_MODEL), cfg.get("openai_reasoning", "")
     CREATURES, WINDOWS = list(creatures), dict(windows or {})
     ONLINE = online or (lambda: list(WINDOWS))
 
@@ -152,8 +161,60 @@ def client():
     return _client
 
 
+_NO_REASONING = set()   # OpenAI models that rejected reasoning_effort
+
+
+def call_openai(messages, schema=None):
+    """One OpenAI Chat Completions request with the same messages (Claude's format is converted)."""
+    def convert(content):
+        if isinstance(content, str):
+            return content
+        out = []
+        for block in content:
+            if block["type"] == "image":
+                src = block["source"]
+                out.append({"type": "image_url",
+                            "image_url": {"url": f"data:{src['media_type']};base64,{src['data']}"}})
+            else:
+                out.append({"type": "text", "text": block["text"]})
+        return out
+
+    body = {"model": OPENAI_MODEL, "max_completion_tokens": 2000,
+            "messages": [{"role": "system", "content": PERSONA + sideshow_prompt()}]
+                        + [{"role": m["role"], "content": convert(m["content"])} for m in messages]}
+    if schema:
+        body["response_format"] = {"type": "json_schema",
+                                   "json_schema": {"name": "pumpkin_reply", "strict": True, "schema": schema}}
+    if OPENAI_REASONING and OPENAI_MODEL not in _NO_REASONING:
+        body["reasoning_effort"] = OPENAI_REASONING
+
+    def post(b):
+        req = urllib.request.Request("https://api.openai.com/v1/chat/completions", data=json.dumps(b).encode(),
+                                     headers={"Authorization": f"Bearer {os.environ.get('OPENAI_API_KEY', '')}",
+                                              "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return json.loads(r.read())
+
+    try:
+        data = post(body)
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode(errors="replace")
+        if exc.code == 400 and "reasoning" in detail and "reasoning_effort" in body:
+            _NO_REASONING.add(OPENAI_MODEL)          # the chosen model doesn't take this setting; stop sending it
+            body.pop("reasoning_effort")
+            data = post(body)
+        else:
+            raise RuntimeError(f"OpenAI {exc.code}: {detail[:300]}") from None
+    message = data["choices"][0]["message"]
+    if message.get("refusal"):
+        return None
+    return (message.get("content") or "").strip() or None
+
+
 def call_claude(messages, schema=None):
-    """One Claude request. Returns the response's final text (or None on refusal)."""
+    """One brain request. Returns the response's final text (or None on refusal)."""
+    if PROVIDER == "openai":
+        return call_openai(messages, schema)
     kwargs = {}
     if schema:
         kwargs["output_config"] = {"effort": EFFORT, "format": {"type": "json_schema", "schema": schema}}

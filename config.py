@@ -12,6 +12,9 @@ DEFAULTS = {
         "model": "claude-opus-5-5",   # claude-haiku-4-5 answers faster
         "effort": "low",
         "fake": False,                # canned replies, no API calls (PUMPKIN_FAKE=1 also works)
+        "provider": "auto",           # claude | openai | auto (Claude if ANTHROPIC_API_KEY is set, else OpenAI)
+        "openai_model": "gpt-5-mini", # used when the provider is openai
+        "openai_reasoning": "minimal",  # quick answers; "" to leave it to the model
     },
     "camera": {
         "source": "auto",             # auto | picamera | usb | file:/path/to/video.mp4
@@ -158,8 +161,14 @@ def load(path=None):
             _merge(cfg, tomllib.load(f))
     if os.environ.get("PUMPKIN_FAKE") == "1":
         cfg["claude"]["fake"] = True
+    brain = cfg["claude"]
+    if brain["provider"] == "auto":
+        has_openai = os.environ.get("OPENAI_API_KEY") and not os.environ.get("ANTHROPIC_API_KEY")
+        brain["provider"] = "openai" if has_openai else "claude"
+    if brain["provider"] == "openai":
+        brain["model"] = brain["openai_model"]
     if os.environ.get("PUMPKIN_MODEL"):
-        cfg["claude"]["model"] = os.environ["PUMPKIN_MODEL"]
+        brain["model"] = brain["openai_model"] = os.environ["PUMPKIN_MODEL"]
     if os.environ.get("PUMPKIN_PORT"):
         cfg["web"]["port"] = int(os.environ["PUMPKIN_PORT"])
     return cfg

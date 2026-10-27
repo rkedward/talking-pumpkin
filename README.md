@@ -43,6 +43,9 @@ unplug/replug it. `arecord -l` should then list the XVF3800. (The plain XVF3800 
 ReSpeaker v2.0 work without this step.)
 
 Logs: `journalctl --user -u pumpkin -f` · Restart: `systemctl --user restart pumpkin`
+To use OpenAI (ChatGPT's maker) instead of Claude, put `OPENAI_API_KEY=...` in `.env` and leave
+`ANTHROPIC_API_KEY` out: the pumpkin then uses OpenAI for the conversation (`[claude] openai_model`,
+default `gpt-5-mini`). Add `engine = "openai"` under `[tts]` for OpenAI's voice too.
 Add the API key later by editing `~/pumpkin/.env` (`ANTHROPIC_API_KEY=...`, and delete the
 `PUMPKIN_FAKE=1` line), then restart.
 
