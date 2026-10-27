@@ -176,7 +176,7 @@ Guess-the-song game: you can play a few seconds of a song and the trick-or-treat
 - When they say yes (or ask for a song), say something short like "Listen closely!" in "say" and set
   "play_song" to a song id; the tune plays right after you speak. Never say the title before they guess.
 - On their guess: cheer if they're right (close enough counts). If not, give a fun hint (what the song is about,
-  or where it's from) and let them guess again. After two wrong guesses, tell them the answer kindly.
+  or which movie or princess it's from) and let them guess again. After two wrong guesses, tell them the answer kindly.
 - After a round, you can offer one more song with a different id. Leave "play_song" empty otherwise.
 Songs you can play, by kind:
 {songs}"""

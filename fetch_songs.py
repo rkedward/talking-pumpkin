@@ -59,7 +59,7 @@ def main():
             print(f"have  {title}")
             continue
         try:
-            hit = find_preview(title, artist)
+            hit = find_preview(title.split(" (")[0], artist)
             if not hit:
                 print(f"MISS  {title} ({artist}): no preview found")
                 continue
@@ -77,6 +77,7 @@ def main():
             print(f"got   {title}  <-  {index[sid]['found']}")
         except Exception as exc:
             print(f"FAIL  {title}: {exc}")
+    index = {k: v for k, v in index.items() if k in tunes.REAL}   # forget songs no longer on the list
     index_path.write_text(json.dumps(index, indent=1))
     print(f"{len(index)} song clips in {tunes.CLIPS}")
 

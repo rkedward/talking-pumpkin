@@ -80,28 +80,28 @@ GENRES = {
 }
 TEENS_ONLY = {"jaws", "toccata", "halloween"}
 
-# Real recordings fetch_songs.py looks for: id -> (title, artist, kind, teens_only).
+# Real recordings fetch_songs.py looks for: id -> (title (movie), artist, kind, teens_only).
 REAL = {
-    "golden": ("Golden", "HUNTR/X", "pop songs", False),
-    "soda_pop": ("Soda Pop", "Saja Boys", "pop songs", False),
-    "happy": ("Happy", "Pharrell Williams", "pop songs", False),
-    "cant_stop_feeling": ("Can't Stop the Feeling!", "Justin Timberlake", "pop songs", False),
-    "shake_it_off": ("Shake It Off", "Taylor Swift", "pop songs", False),
-    "uptown_funk": ("Uptown Funk", "Mark Ronson", "pop songs", False),
-    "baby_shark": ("Baby Shark", "Pinkfong", "kids' songs", False),
-    "let_it_go": ("Let It Go", "Idina Menzel", "movie songs", False),
-    "bruno": ("We Don't Talk About Bruno", "Encanto", "movie songs", False),
-    "how_far": ("How Far I'll Go", "Auli'i Cravalho", "movie songs", False),
-    "friend_in_me": ("You've Got a Friend in Me", "Randy Newman", "movie songs", False),
-    "under_the_sea": ("Under the Sea", "Samuel E. Wright", "movie songs", False),
-    "hakuna_matata": ("Hakuna Matata", "Nathan Lane", "movie songs", False),
-    "monster_mash": ("Monster Mash", "Bobby Pickett", "Halloween songs", False),
-    "ghostbusters": ("Ghostbusters", "Ray Parker Jr.", "Halloween songs", False),
-    "this_is_halloween": ("This Is Halloween", "The Citizens of Halloween", "Halloween songs", False),
-    "spooky_skeletons": ("Spooky, Scary Skeletons", "Andrew Gold", "Halloween songs", False),
-    "addams_theme": ("The Addams Family Theme", "Vic Mizzy", "Halloween songs", False),
-    "thriller": ("Thriller", "Michael Jackson", "Halloween songs", True),
-    "somebodys_watching": ("Somebody's Watching Me", "Rockwell", "Halloween songs", True),
+    "let_it_go": ("Let It Go (Frozen)", "Idina Menzel", "Disney princess songs", False),
+    "snowman": ("Do You Want to Build a Snowman? (Frozen)", "Kristen Bell", "Disney princess songs", False),
+    "first_time": ("For the First Time in Forever (Frozen)", "Kristen Bell", "Disney princess songs", False),
+    "into_the_unknown": ("Into the Unknown (Frozen 2)", "Idina Menzel", "Disney princess songs", False),
+    "how_far": ("How Far I'll Go (Moana)", "Auli'i Cravalho", "Disney princess songs", False),
+    "part_of_your_world": ("Part of Your World (The Little Mermaid)", "Jodi Benson", "Disney princess songs", False),
+    "under_the_sea": ("Under the Sea (The Little Mermaid)", "Samuel E. Wright", "Disney princess songs", False),
+    "be_our_guest": ("Be Our Guest (Beauty and the Beast)", "Jerry Orbach", "Disney princess songs", False),
+    "beauty_beast": ("Beauty and the Beast (Beauty and the Beast)", "Angela Lansbury", "Disney princess songs", False),
+    "whole_new_world": ("A Whole New World (Aladdin)", "Lea Salonga", "Disney princess songs", False),
+    "life_begin": ("When Will My Life Begin (Tangled)", "Mandy Moore", "Disney princess songs", False),
+    "see_the_light": ("I See the Light (Tangled)", "Mandy Moore", "Disney princess songs", False),
+    "colors_wind": ("Colors of the Wind (Pocahontas)", "Judy Kuhn", "Disney princess songs", False),
+    "reflection": ("Reflection (Mulan)", "Lea Salonga", "Disney princess songs", False),
+    "make_a_man": ("I'll Make a Man Out of You (Mulan)", "Donny Osmond", "Disney princess songs", False),
+    "almost_there": ("Almost There (The Princess and the Frog)", "Anika Noni Rose", "Disney princess songs", False),
+    "bibbidi": ("Bibbidi-Bobbidi-Boo (Cinderella)", "Verna Felton", "Disney princess songs", False),
+    "once_upon_dream": ("Once Upon a Dream (Sleeping Beauty)", "Mary Costa", "Disney princess songs", False),
+    "someday_prince": ("Someday My Prince Will Come (Snow White)", "Adriana Caselotti", "Disney princess songs", False),
+    "touch_the_sky": ("Touch the Sky (Brave)", "Julie Fowlis", "Disney princess songs", False),
 }
 CLIPS = ROOT / "sounds" / "songs"   # <id>.wav plus songs.json, written by fetch_songs.py
 SOURCE = "auto"                     # auto (real clips when fetched, plus music box) | real | musicbox
@@ -119,7 +119,7 @@ def catalog():
             except Exception:
                 fetched = {}
             for sid, info in fetched.items():
-                if (CLIPS / f"{sid}.wav").exists():
+                if sid in REAL and (CLIPS / f"{sid}.wav").exists():
                     found[sid] = {"title": info["title"], "kind": info["kind"], "teens": info.get("teens", False),
                                   "file": CLIPS / f"{sid}.wav"}
         if SOURCE == "musicbox" or (SOURCE == "auto") or not found:
