@@ -287,6 +287,11 @@ def make_tts(cfg, log):
 
 # --------------------------------------------------------------------------------------------- speaker
 
+def _resample(audio, rate, new_rate):
+    n = int(len(audio) * new_rate / rate)
+    return np.interp(np.linspace(0, len(audio) - 1, n), np.arange(len(audio)), audio.astype(np.float32)).astype(np.int16)
+
+
 def _sentences(text):
     return [s.strip() for s in re.findall(r"[^.!?]+[.!?]*", text) if s.strip()] or [text]
 
@@ -299,7 +304,11 @@ class Speaker:
 
     def __init__(self, tts, cfg, mic, log):
         self.tts, self.mic, self.log = tts, mic, log
+        self.channels = 1
         self.device = _find_device(cfg["output_device"], "output")
+        if cfg.get("output_device") and self.device is None:
+            log(f"speaker: no output device matching {cfg['output_device']!r}; using the default")
+        self._formats = {}   # voice sample rate -> (rate, channels) the output device accepts
         # Output buffer in seconds. A small buffer underruns (choppy speech) whenever the camera, speech
         # recognition or the next sentence's synthesis keeps the CPU busy; the mouth timing allows for it.
         self.latency = float(cfg.get("output_latency", 0.25))
@@ -340,20 +349,47 @@ class Speaker:
                 if audio is None or len(audio) == 0:
                     self._mime(sentence, on_level, should_stop)
                     continue
+                out_rate, channels = self._format(rate)
+                if out_rate != rate:
+                    audio = _resample(audio, rate, out_rate)
+                    rate = out_rate
                 if stream is None or rate != stream_rate:
                     if stream is not None:
                         self._close(stream)
-                    stream, stream_rate = self._open(rate), rate
+                    stream, stream_rate = self._open(rate, channels), rate
                     # lead-in silence so the speaker is awake before the first word
-                    stream.write(np.zeros(int(rate * self.lead_in), np.int16))
+                    stream.write(np.zeros((int(rate * self.lead_in), channels), np.int16))
                 self._play(stream, audio, rate, on_level, should_stop)
         finally:
             if stream is not None:
                 self._close(stream)
             on_level(0.0)
 
-    def _open(self, rate):
-        stream = sd.OutputStream(samplerate=rate, channels=1, dtype="int16", device=self.device,
+    def _format(self, rate):
+        """A sample rate and channel count the output device accepts. A speaker picked by name is opened
+        directly (no PipeWire in between), and USB speakers often take only 48 kHz stereo."""
+        if rate not in self._formats:
+            found = (rate, 1)
+            for r in (rate, 48000, 44100):
+                ok = None
+                for ch in (1, 2):
+                    try:
+                        sd.check_output_settings(device=self.device, samplerate=r, channels=ch, dtype="int16")
+                        ok = (r, ch)
+                        break
+                    except Exception:
+                        pass
+                if ok:
+                    found = ok
+                    break
+            self._formats[rate] = found
+            if found != (rate, 1):
+                self.log(f"speaker: playing at {found[0]} Hz, {found[1]} channel(s)")
+        return self._formats[rate]
+
+    def _open(self, rate, channels=1):
+        self.channels = channels
+        stream = sd.OutputStream(samplerate=rate, channels=channels, dtype="int16", device=self.device,
                                  blocksize=max(1, int(rate * self.BLOCK_S)), latency=self.latency)
         stream.start()
         return stream
@@ -380,7 +416,7 @@ class Speaker:
         for i in range(n_blocks):
             if should_stop():
                 break
-            stream.write(blocks[i])
+            stream.write(blocks[i] if self.channels == 1 else np.repeat(blocks[i][:, None], self.channels, axis=1))
             on_level(float(levels[i - delay]) if i >= delay else 0.0)
 
     def _mime(self, sentence, on_level, should_stop):
