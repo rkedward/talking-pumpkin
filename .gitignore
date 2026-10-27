@@ -1,1 +1,6 @@
 __pycache__/
+.env
+config.toml
+state.json
+models/*
+!models/efficientdet_lite0.tflite
