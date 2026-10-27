@@ -139,6 +139,8 @@ LAUGH_RE = re.compile(r"^\W*((ha|ho|hee|he|heh|hah|mwa|mwah)\W*)+$", re.I)
 
 _LAUGH_WORD = r"(?:(?:ha|ho|hee|heh|hah)\b[\s,\-]*){2,}|(?:ha(?:ha)+|he(?:he)+|ho(?:ho)+|heehee|mwa(?:ha)+)\b[\s,\-]*"
 LEAD_LAUGH = re.compile(r"^(?:" + _LAUGH_WORD + r")+", re.I)
+MID_LAUGH = re.compile(r",\s*(?:(?:ha|hee|heh|hah)\b[\s,\-]*)+,\s*", re.I)          # "I mean, ha, I'm ..."
+LEAD_ONE_LAUGH = re.compile(r"^(?:(?:ha|hee|heh|hah)\b\s*[,\-]\s*)+", re.I)             # "Ha, nice hat!"
 TRAIL_LAUGH = re.compile(r"[\s,\-]+(?:" + _LAUGH_WORD + r")+([.!?]*)$", re.I)
 
 
@@ -155,7 +157,8 @@ def _no_laughs(text):
         part = part.strip()
         if LAUGH_RE.match(part):
             continue
-        part = LEAD_LAUGH.sub("", part)          # "Hee hee, I'm a great host!" -> "I'm a great host!"
+        part = MID_LAUGH.sub(", ", part)
+        part = LEAD_ONE_LAUGH.sub("", LEAD_LAUGH.sub("", part))          # "Hee hee, I'm a great host!" -> "I'm a great host!"
         part = TRAIL_LAUGH.sub(r"\1", part)       # "What fun, ha ha!" -> "What fun!"
         if part:
             kept.append(part[0].upper() + part[1:])
