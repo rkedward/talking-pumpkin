@@ -97,7 +97,7 @@ REAL = {
     "hakuna_matata": ("Hakuna Matata", "Nathan Lane", "movie songs", False),
     "monster_mash": ("Monster Mash", "Bobby Pickett", "Halloween songs", False),
     "ghostbusters": ("Ghostbusters", "Ray Parker Jr.", "Halloween songs", False),
-    "this_is_halloween": ("This Is Halloween", "The Nightmare Before Christmas", "Halloween songs", False),
+    "this_is_halloween": ("This Is Halloween", "The Citizens of Halloween", "Halloween songs", False),
     "spooky_skeletons": ("Spooky, Scary Skeletons", "Andrew Gold", "Halloween songs", False),
     "addams_theme": ("The Addams Family Theme", "Vic Mizzy", "Halloween songs", False),
     "thriller": ("Thriller", "Michael Jackson", "Halloween songs", True),

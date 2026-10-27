@@ -5,6 +5,7 @@ sounds/songs/, so nothing is downloaded on Halloween night. Needs ffmpeg (sudo a
 
     python3 fetch_songs.py          # fetch the songs that aren't there yet
     python3 fetch_songs.py --all    # fetch them all again
+    python3 fetch_songs.py let_it_go thriller   # fetch just these again
 """
 
 import json
@@ -28,13 +29,17 @@ def find_preview(title, artist):
         return None
     key = title.lower().split(" (")[0].replace("'", "").replace(",", "")
 
+    bad = ("karaoke", "instrumental", "live", "remix", "cover", "tribute", "version", "made famous", "lullaby",
+           "acoustic", "sped up", "slowed")
+
     def score(x):
         name = x.get("trackName", "").lower().replace("'", "").replace(",", "")
         who = (x.get("artistName", "") + " " + x.get("collectionName", "")).lower()
-        return (key in name) * 2 + (artist.lower() in who) + ("karaoke" not in name and "instrumental" not in name)
+        clean = not any(b in (name + " " + who) for b in bad)
+        return (key in name) * 2 + (artist.lower() in who) * 2 + clean
 
     best = max(results, key=score)
-    return best if score(best) >= 2 else None
+    return best if score(best) >= 4 else None
 
 
 def main():
@@ -45,9 +50,12 @@ def main():
     except Exception:
         index = {}
     redo = "--all" in sys.argv
+    only = [a for a in sys.argv[1:] if not a.startswith("--")]   # song ids to fetch again
     for sid, (title, artist, kind, teens) in tunes.REAL.items():
         out = tunes.CLIPS / f"{sid}.wav"
-        if out.exists() and sid in index and not redo:
+        if only and sid not in only:
+            continue
+        if out.exists() and sid in index and not redo and not only:
             print(f"have  {title}")
             continue
         try:
