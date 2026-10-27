@@ -11,6 +11,7 @@ import threading
 import time
 import urllib.request
 import wave
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -232,6 +233,8 @@ class PiperTTS:
 class ElevenLabsTTS:
     """Cloud character voices. Needs ELEVENLABS_API_KEY and a voice id from your ElevenLabs voice library."""
 
+    cloud = True
+
     RATE = 22050
 
     def __init__(self, cfg, log):
@@ -256,6 +259,7 @@ class OpenAITTS:
     """OpenAI's natural voices (the same family as ChatGPT's). Needs OPENAI_API_KEY from platform.openai.com;
     a ChatGPT subscription doesn't include API use."""
 
+    cloud = True
     RATE = 24000   # response_format "pcm" is 24 kHz, 16-bit, mono
 
     def __init__(self, cfg, log):
@@ -304,6 +308,8 @@ class EspeakTTS:
 class _WithBackup:
     """Uses the cloud voice, and the local one for any sentence the cloud voice fails on."""
 
+    cloud = True
+
     def __init__(self, main, backup, name, log):
         self.main, self.backup, self.name, self.log = main, backup, name, log
         self.warned = 0
@@ -349,6 +355,15 @@ def _resample(audio, rate, new_rate):
     return np.interp(np.linspace(0, len(audio) - 1, n), np.arange(len(audio)), audio.astype(np.float32)).astype(np.int16)
 
 
+def _trim(audio, rate, threshold=300, keep_s=0.04):
+    """Cut the silence a voice engine leaves before and after a sentence; the pause settings decide the gaps."""
+    loud = np.flatnonzero(np.abs(audio.astype(np.int32)) > threshold)
+    if not len(loud):
+        return audio
+    keep = int(rate * keep_s)
+    return audio[max(0, loud[0] - keep): loud[-1] + keep]
+
+
 def _sentences(text):
     return [s.strip() for s in re.findall(r"[^.!?]+[.!?]*", text) if s.strip()] or [text]
 
@@ -379,19 +394,33 @@ class Speaker:
         sentences = _sentences(text)
         ready = queue.Queue()
 
-        def producer():
-            for s in sentences:
-                if should_stop():
-                    break
-                try:
-                    audio, rate = self.tts.synth(s) if self.tts else (None, None)
+        def make(s):
+            if should_stop():
+                return s, None, None
+            try:
+                audio, rate = self.tts.synth(s) if self.tts else (None, None)
+                if audio is not None and len(audio):
+                    audio = _trim(audio, rate)
                     pause = self.question_pause if s.rstrip().endswith("?") else self.pause
-                    if audio is not None and len(audio) and pause > 0:
+                    if pause > 0:
                         audio = np.concatenate([audio, np.zeros(int(rate * pause), np.int16)])
-                except Exception as exc:
-                    self.log(f"voice error: {exc}")
-                    audio, rate = None, None
-                ready.put((s, audio, rate))
+            except Exception as exc:
+                self.log(f"voice error: {exc}")
+                audio, rate = None, None
+            return s, audio, rate
+
+        def producer():
+            if getattr(self.tts, "cloud", False):
+                # Cloud voices take a second or more per request: ask for every sentence at once (in order), so
+                # the next one is ready before the current one ends instead of leaving a gap.
+                with ThreadPoolExecutor(max_workers=4) as pool:
+                    for item in pool.map(make, sentences):
+                        ready.put(item)
+            else:
+                for s in sentences:
+                    if should_stop():
+                        break
+                    ready.put(make(s))
             ready.put(None)
 
         threading.Thread(target=producer, daemon=True).start()
