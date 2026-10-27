@@ -4,6 +4,7 @@ conversation history."""
 import json
 import os
 import random
+import re
 import threading
 import time
 import urllib.error
@@ -14,6 +15,7 @@ SESSION_TTL = 15 * 60
 MODEL = "claude-opus-5-5"
 EFFORT = "low"
 FAKE = False
+LAUGH = True             # [claude] laugh: false = no "Ha ha ha!" lines at all
 PROVIDER = "claude"      # claude | openai
 OPENAI_MODEL = "gpt-5-mini"
 OPENAI_REASONING = "minimal"
@@ -26,6 +28,8 @@ def configure(cfg, creatures=(), windows=None, online=None):
     global MODEL, EFFORT, FAKE, CREATURES, WINDOWS, ONLINE, PROVIDER, OPENAI_MODEL, OPENAI_REASONING
     MODEL, EFFORT, FAKE = cfg["model"], cfg["effort"], bool(cfg["fake"])
     PROVIDER = cfg.get("provider", "claude")
+    global LAUGH
+    LAUGH = bool(cfg.get("laugh", True))
     OPENAI_MODEL, OPENAI_REASONING = cfg.get("openai_model", OPENAI_MODEL), cfg.get("openai_reasoning", "")
     CREATURES, WINDOWS = list(creatures), dict(windows or {})
     ONLINE = online or (lambda: list(WINDOWS))
@@ -111,9 +115,7 @@ Trick-or-treaters (often young kids, sometimes teens and parents) walk up to you
 spoken aloud by a text-to-speech voice, so:
 - Write plain spoken sentences only. No emoji, stage directions, asterisks, lists, or markdown.
 - Keep it short: one to three sentences, under about 45 words.
-- You are JOLLY: big-hearted, bubbly and silly, and you crack yourself up. After a joke or pun, laugh at it
-  as its own short sentence written out in words, like "Ha ha ha!" or "Ha ha!" (never "Ho ho ho",
-  which sounds like Santa, and never "*laughs*"; the speaker plays a real laugh for it). You can chuckle at a funny costume or question too.
+- You are JOLLY: big-hearted, bubbly and silly, and you crack yourself up.{laugh}
 - Fun, not scary: with little kids or mixed groups be cozy and goofy. "Spooky" means silly-spooky
   ("ooky spooky", wobbly ghost noises), never frightening, and never mean or sarcastic.
 - If the group is clearly all teenagers (no little kids with them), you may be spookier: dramatic,
@@ -126,6 +128,26 @@ spoken aloud by a text-to-speech voice, so:
 - Stay in character as a pumpkin. If asked if you're real, have fun with it ("as real as a pumpkin can be!").
 - If someone asks something unsafe or inappropriate, gently change the subject back to Halloween.
 - Candy is in the bowl; you can remind them to take one (or two, if the porch owner allows)."""
+
+LAUGH_ON = """ After a joke or pun, laugh at it
+  as its own short sentence written out in words, like "Ha ha ha!" or "Ha ha!" (never "Ho ho ho",
+  which sounds like Santa, and never "*laughs*"; the speaker plays a real laugh for it). You can chuckle at a funny costume or question too."""
+LAUGH_OFF = """ Show it in your words and delight, but never
+  write out laughter ("ha ha", "ho ho", "hee hee") or "*laughs*"."""
+LAUGH_RE = re.compile(r"^\W*((ha|ho|hee|he|heh|hah|mwa|mwah)\W*)+$", re.I)
+
+
+def persona():
+    return PERSONA.replace("{laugh}", LAUGH_ON if LAUGH else LAUGH_OFF) + sideshow_prompt()
+
+
+def _no_laughs(text):
+    """Drop written-out laughter (a "Ha ha!" sentence) when laughing is switched off."""
+    if LAUGH or not text:
+        return text
+    kept = [p.strip() for p in re.findall(r"[^.!?]+[.!?]*", text) if not LAUGH_RE.match(p.strip())]
+    return " ".join(p for p in kept if p) or text
+
 
 GREET_INSTRUCTIONS = """Trick-or-treaters just walked up. This snapshot is from the camera next to you ({people} {noun} detected).
 Identify each visible costume and whether this group is "kids" (any little kids, or you can't tell) or
@@ -180,7 +202,7 @@ def call_openai(messages, schema=None):
         return out
 
     body = {"model": OPENAI_MODEL, "max_completion_tokens": 2000,
-            "messages": [{"role": "system", "content": PERSONA + sideshow_prompt()}]
+            "messages": [{"role": "system", "content": persona()}]
                         + [{"role": m["role"], "content": convert(m["content"])} for m in messages]}
     if schema:
         body["response_format"] = {"type": "json_schema",
@@ -223,7 +245,7 @@ def call_claude(messages, schema=None):
     response = client().beta.messages.create(
         model=MODEL,
         max_tokens=2000,
-        system=PERSONA + sideshow_prompt(),
+        system=persona(),
         messages=messages,
         # Server-side fallback: if a safety classifier declines, the API retries on a suitable model.
         betas=["server-side-fallback-2026-07-01"],
@@ -257,7 +279,7 @@ def _sideshow_fields(data):
     window = data.get("window") if data.get("window") in WINDOWS else ""
     fly_to = data.get("fly_to") if data.get("fly_to") in WINDOWS else ""
     return {"summon": summon, "window": window, "fly_to": fly_to,
-            "creature_says": (data.get("creature_says") or "").strip()}
+            "creature_says": _no_laughs((data.get("creature_says") or "").strip())}
 
 
 def greet(image_b64, people, note=""):
@@ -285,7 +307,7 @@ def greet(image_b64, people, note=""):
         content.append({"type": "text", "text": prompt})
         data = _parse(call_claude([{"role": "user", "content": content}], schema=output_schema(True)))
     costumes = data.get("costumes") or []
-    say = data.get("say") or FALLBACK_SAY
+    say = _no_laughs(data.get("say") or FALLBACK_SAY)
     audience = "teens" if data.get("audience") == "teens" else "kids"
     result = {"costumes": costumes, "audience": audience, "say": say, **_sideshow_fields(data)}
 
@@ -319,7 +341,7 @@ def chat(sid, text, on_stage=None):
             data["creature_says"] = "Ooooh, I agree with the pumpkin!"
     else:
         data = _parse(call_claude(history, schema=output_schema(False)))
-    result = {"say": data.get("say") or "Ooh, let's talk about something else. Like candy! Have you picked one yet?",
+    result = {"say": _no_laughs(data.get("say")) or "Ooh, let's talk about something else. Like candy! Have you picked one yet?",
               **_sideshow_fields(data)}
     with _lock:
         session["history"] = history + [{"role": "assistant", "content": json.dumps(result)}]

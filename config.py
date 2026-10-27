@@ -12,6 +12,7 @@ DEFAULTS = {
         "model": "claude-opus-5-5",   # claude-haiku-5-5 answers faster
         "effort": "low",
         "fake": False,                # canned replies, no API calls (PUMPKIN_FAKE=1 also works)
+        "laugh": True,                # false = the pumpkin never says "Ha ha ha!"
         "provider": "auto",           # claude | openai | auto (Claude if ANTHROPIC_API_KEY is set, else OpenAI)
         "openai_model": "gpt-5-mini", # used when the provider is openai
         "openai_reasoning": "minimal",  # quick answers; "" to leave it to the model
