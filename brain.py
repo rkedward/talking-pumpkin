@@ -136,6 +136,10 @@ LAUGH_OFF = """ Show it in your words and delight, but never
   write out laughter ("ha ha", "ho ho", "hee hee") or "*laughs*"."""
 LAUGH_RE = re.compile(r"^\W*((ha|ho|hee|he|heh|hah|mwa|mwah)\W*)+$", re.I)
 
+_LAUGH_WORD = r"(?:(?:ha|ho|hee|heh|hah)\b[\s,\-]*){2,}|(?:ha(?:ha)+|he(?:he)+|ho(?:ho)+|heehee|mwa(?:ha)+)\b[\s,\-]*"
+LEAD_LAUGH = re.compile(r"^(?:" + _LAUGH_WORD + r")+", re.I)
+TRAIL_LAUGH = re.compile(r"[\s,\-]+(?:" + _LAUGH_WORD + r")+([.!?]*)$", re.I)
+
 
 def persona():
     return PERSONA.replace("{laugh}", LAUGH_ON if LAUGH else LAUGH_OFF) + sideshow_prompt()
@@ -145,8 +149,16 @@ def _no_laughs(text):
     """Drop written-out laughter (a "Ha ha!" sentence) when laughing is switched off."""
     if LAUGH or not text:
         return text
-    kept = [p.strip() for p in re.findall(r"[^.!?]+[.!?]*", text) if not LAUGH_RE.match(p.strip())]
-    return " ".join(p for p in kept if p) or text
+    kept = []
+    for part in re.findall(r"[^.!?]+[.!?]*", text):
+        part = part.strip()
+        if LAUGH_RE.match(part):
+            continue
+        part = LEAD_LAUGH.sub("", part)          # "Hee hee, I'm a great host!" -> "I'm a great host!"
+        part = TRAIL_LAUGH.sub(r"\1", part)       # "What fun, ha ha!" -> "What fun!"
+        if part:
+            kept.append(part[0].upper() + part[1:])
+    return " ".join(kept) or text
 
 
 GREET_INSTRUCTIONS = """Trick-or-treaters just walked up. This snapshot is from the camera next to you ({people} {noun} detected).
