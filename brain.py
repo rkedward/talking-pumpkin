@@ -11,12 +11,15 @@ import urllib.error
 import urllib.request
 import uuid
 
+import tunes
+
 SESSION_TTL = 15 * 60
 MODEL = "claude-opus-5-5"
 EFFORT = "low"
 FAKE = False
 LAUGH = True             # [claude] laugh: false = no "Ha ha ha!" lines at all
 LAUGH_TEXT = "Ha ha ha!" # [claude] laugh_text: how the pumpkin writes its laugh
+GAME = True              # [claude] song_game: offer the "guess the song" game
 PROVIDER = "claude"      # claude | openai
 OPENAI_MODEL = "gpt-5-mini"
 OPENAI_REASONING = "minimal"
@@ -31,7 +34,8 @@ def configure(cfg, creatures=(), windows=None, online=None):
     PROVIDER = cfg.get("provider", "claude")
     global LAUGH
     LAUGH = bool(cfg.get("laugh", True))
-    global LAUGH_TEXT
+    global LAUGH_TEXT, GAME
+    GAME = bool(cfg.get("song_game", True))
     LAUGH_TEXT = cfg.get("laugh_text") or LAUGH_TEXT
     OPENAI_MODEL, OPENAI_REASONING = cfg.get("openai_model", OPENAI_MODEL), cfg.get("openai_reasoning", "")
     CREATURES, WINDOWS = list(creatures), dict(windows or {})
@@ -90,6 +94,10 @@ the best costume, telling a joke, doing a silly trick), and banter with them. Yo
 def output_schema(with_costumes):
     props = {"say": {"type": "string", "description": "Exactly what the pumpkin says aloud."}}
     required = ["say"]
+    if GAME and not with_costumes:
+        props["play_song"] = {"type": "string", "enum": [""] + list(tunes.SONGS),
+                              "description": "Song to play for the guessing game right after you speak, or empty."}
+        required.append("play_song")
     if with_costumes:
         props = {"costumes": {"type": "array", "items": {"type": "string"},
                               "description": "Short description of each costume seen, e.g. 'witch with a green hat'."},
@@ -147,9 +155,27 @@ LEAD_ONE_LAUGH = re.compile(r"^(?:(?:ha|hee|heh|hah)\b\s*[,\-]\s*)+", re.I)     
 TRAIL_LAUGH = re.compile(r"[\s,\-]+(?:" + _LAUGH_WORD + r")+([.!?]*)$", re.I)
 
 
+def game_prompt():
+    if not GAME:
+        return ""
+    songs = "\n".join(f"- {sid}: {title}" for sid, (title, _) in tunes.SONGS.items())
+    return f"""
+
+Guess-the-song game: you can play the opening of a kids' song on your music box and the trick-or-treaters guess it.
+- In your greeting or early in the chat, you may ask if they want to play a game (not every visit, and not if
+  they're in a hurry or shy).
+- When they say yes (or ask for a song), say something short like "Listen closely!" in "say" and set
+  "play_song" to a song id; the tune plays right after you speak. Never say the title before they guess.
+- On their guess: cheer if they're right (close enough counts). If not, give a fun hint (what the song is about,
+  an animal or a word from it) and let them guess again. After two wrong guesses, tell them the answer kindly.
+- After a round, you can offer one more song with a different id. Leave "play_song" empty otherwise.
+Songs you can play:
+{songs}"""
+
+
 def persona():
     laugh = LAUGH_ON.replace("{laugh_text}", LAUGH_TEXT) if LAUGH else LAUGH_OFF
-    return PERSONA.replace("{laugh}", laugh) + sideshow_prompt()
+    return PERSONA.replace("{laugh}", laugh) + sideshow_prompt() + game_prompt()
 
 
 def _no_laughs(text):
@@ -362,7 +388,8 @@ def chat(sid, text, on_stage=None):
             data["creature_says"] = "Ooooh, I agree with the pumpkin!"
     else:
         data = _parse(call_claude(history, schema=output_schema(False)))
-    result = {"say": _no_laughs(data.get("say")) or "Ooh, let's talk about something else. Like candy! Have you picked one yet?",
+    song = data.get("play_song") if data.get("play_song") in tunes.SONGS else ""
+    result = {"play_song": song, "say": _no_laughs(data.get("say")) or "Ooh, let's talk about something else. Like candy! Have you picked one yet?",
               **_sideshow_fields(data)}
     with _lock:
         session["history"] = history + [{"role": "assistant", "content": json.dumps(result)}]

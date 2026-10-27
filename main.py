@@ -15,6 +15,7 @@ import threading
 import time
 
 import brain
+import tunes
 import config
 from audio import Listener, Microphone, Speaker, WhisperSTT, make_tts
 from align import Aligner
@@ -142,6 +143,20 @@ class Pumpkin:
         self.speaking = False
         self.mouth = 0.0
         self.props.expression("happy" if self.awake else "neutral")
+
+    def play_song(self, song_id):
+        """The guessing game's tune; the mouth bobs along as if the pumpkin is humming it."""
+        try:
+            audio, rate = tunes.synth(song_id)
+        except Exception as exc:
+            self.log(f"song {song_id}: {exc}")
+            return
+        self.log(f"🎵 {tunes.SONGS[song_id][0]}", "said")
+        self.speaking = True
+        self.speaker.play_clip(audio, rate, on_level=lambda level: self._set_mouth(level * 0.5),
+                               should_stop=lambda: self.abort_visit)
+        self.speaking = False
+        self.mouth = 0.0
 
     def _on_sentence(self, sentence):
         expr = self.props.expression_for(sentence)
@@ -271,11 +286,12 @@ class Pumpkin:
         self.sideshow(result)
 
         started, turns = time.time(), 0
+        max_turns, max_s, game_on = int(v["max_turns"]), float(v["max_visit_s"]), False
         while not self.abort_visit:
             if not forced and not self.present():
                 self.say(random.choice(GOODBYES))
                 break
-            if turns >= int(v["max_turns"]) or time.time() - started > float(v["max_visit_s"]):
+            if turns >= max_turns or time.time() - started > max_s:
                 self.say(random.choice(WRAPUPS))
                 break
             self.set_state("listening")
@@ -297,6 +313,12 @@ class Pumpkin:
                 reply = {"say": "Ooh, my pumpkin brain went fuzzy. Happy Halloween!"}
             self.say(reply["say"])
             self.sideshow(reply)
+            if reply.get("play_song") and not self.abort_visit:
+                if not game_on:   # a game takes a few more turns than a chat
+                    game_on = True
+                    max_turns += int(v["game_extra_turns"])
+                    max_s += float(v["game_extra_s"])
+                self.play_song(reply["play_song"])
             turns += 1
         self.props.visit_over()
         if self.show:

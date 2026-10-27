@@ -13,7 +13,8 @@ DEFAULTS = {
         "effort": "low",
         "fake": False,                # canned replies, no API calls (PUMPKIN_FAKE=1 also works)
         "laugh": True,                # false = the pumpkin never says "Ha ha ha!"
-        "laugh_text": "Ha ha ha!",    # how it laughs, e.g. "Ho ho ho!"
+        "laugh_text": "Ha ha ha!",
+        "song_game": True,            # offer the "guess the song" game    # how it laughs, e.g. "Ho ho ho!"
         "provider": "auto",           # claude | openai | auto (Claude if ANTHROPIC_API_KEY is set, else OpenAI)
         "openai_model": "gpt-5-mini", # used when the provider is openai
         "openai_reasoning": "minimal",  # quick answers; "" to leave it to the model
@@ -39,6 +40,8 @@ DEFAULTS = {
         "gone_s": 3.5,                # nobody seen this long = visit over
         "max_turns": 5,
         "max_visit_s": 90,
+        "game_extra_turns": 4,        # a visit that plays the song game gets this many more turns ...
+        "game_extra_s": 60,           # ... and this much more time
         "listen_s": 8,                # how long to wait for each question
         "regreet_s": 12,
     },

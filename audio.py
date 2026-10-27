@@ -515,6 +515,21 @@ class Speaker:
                 self.log(f"speaker: playing at {found[0]} Hz, {found[1]} channel(s)")
         return self._formats[rate]
 
+    def play_clip(self, audio, rate, on_level=lambda level: None, should_stop=lambda: False):
+        """Play ready-made audio (a song for the game) through the same speaker."""
+        if not sd or audio is None or not len(audio):
+            return
+        out_rate, channels = self._format(rate)
+        if out_rate != rate:
+            audio, rate = _resample(audio, rate, out_rate), out_rate
+        stream = self._open(rate, channels)
+        try:
+            stream.write(np.zeros((int(rate * self.lead_in), channels), np.int16))
+            self._play(stream, audio, rate, on_level, should_stop)
+        finally:
+            self._close(stream)
+            on_level(0.0)
+
     def _open(self, rate, channels=1):
         self.channels = channels
         stream = sd.OutputStream(samplerate=rate, channels=channels, dtype="int16", device=self.device,
