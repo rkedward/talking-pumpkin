@@ -301,6 +301,7 @@ class Speaker:
     reports a 0..1 mouth-opening level from the loudness of the audio as it is heard."""
 
     BLOCK_S = 1 / 60
+    volume = 1.0   # shared by the pumpkin and his assistants; set from the debug panel (0 .. 1.5)
 
     def __init__(self, tts, cfg, mic, log):
         self.tts, self.mic, self.log = tts, mic, log
@@ -416,7 +417,10 @@ class Speaker:
         for i in range(n_blocks):
             if should_stop():
                 break
-            stream.write(blocks[i] if self.channels == 1 else np.repeat(blocks[i][:, None], self.channels, axis=1))
+            out = blocks[i]
+            if Speaker.volume != 1.0:
+                out = np.clip(out.astype(np.float32) * Speaker.volume, -32768, 32767).astype(np.int16)
+            stream.write(out if self.channels == 1 else np.repeat(out[:, None], self.channels, axis=1))
             on_level(float(levels[i - delay]) if i >= delay else 0.0)
 
     def _mime(self, sentence, on_level, should_stop):

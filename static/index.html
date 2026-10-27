@@ -45,6 +45,11 @@
     <button data-cmd="mute">Mute mic</button>
     <button data-cmd="guide">Guide</button>
   </div>
+  <div class="row" title="Speaker volume (saved on the Pi)">
+    <label for="vol">Volume</label>
+    <input id="vol" type="range" min="0" max="150" step="5" value="100">
+    <span id="volVal">100%</span>
+  </div>
   <div class="row" title="Line the face up with the pumpkin">
     <button data-key="ArrowLeft">←</button><button data-key="ArrowRight">→</button>
     <button data-key="ArrowUp">↑</button><button data-key="ArrowDown">↓</button>

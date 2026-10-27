@@ -72,6 +72,7 @@ setInterval(async () => {
       line += ` · windows on: ${s.windows_on.join(", ") || "none"}`;
       fillWindows(s.windows, s.windows_on);
     }
+    if (s.volume !== undefined && !volDragging) { $("vol").value = s.volume; $("volVal").textContent = `${s.volume}%`; }
     if (s.mic_muted) line += " · MIC MUTED";
     if (s.fake) line += " · FAKE MODE";
     stateEl.textContent = line;
@@ -118,6 +119,11 @@ document.querySelectorAll("[data-cmd]").forEach((b) => b.addEventListener("click
   const cmd = b.dataset.cmd;
   post(cmd);
 }));
+
+// Volume slider: sends the new level when you let go (the label follows while dragging).
+let volDragging = false;
+$("vol").addEventListener("input", (e) => { volDragging = true; $("volVal").textContent = `${e.target.value}%`; });
+$("vol").addEventListener("change", (e) => { volDragging = false; post("volume", { percent: Number(e.target.value) }); });
 
 // Nudge buttons, so the face can be lined up from a phone.
 document.querySelectorAll("[data-key]").forEach((b) => b.addEventListener("click", () => {

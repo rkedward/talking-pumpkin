@@ -111,6 +111,7 @@ class Pumpkin:
                 self.log(f"speech recognition off ({type(exc).__name__}: {exc}); type questions in the debug panel")
         self.listener = Listener(self.mic, cfg["mic"], stt)
         self.speaker = Speaker(make_tts(cfg["tts"], self.log), cfg["tts"], self.mic, self.log)
+        Speaker.volume = float(saved.get("volume", 1.0))
         self.show = None
         if cfg["window"]["enabled"]:
             self.show = SideShow(cfg["window"], cfg["tts"], self.mic, self.hub, self.log)
@@ -398,6 +399,13 @@ class Pumpkin:
         elif name == "guide":
             self.guide = not self.guide
             self.hub.publish({"t": "guide", "on": self.guide})
+        elif name == "volume":
+            try:
+                Speaker.volume = min(1.5, max(0.0, float(data.get("percent", 100)) / 100))
+            except (TypeError, ValueError):
+                return {"error": "percent must be a number"}
+            self._save()
+            self.log(f"volume {round(Speaker.volume * 100)}%")
         elif name == "mute":
             self.mic.user_muted = not self.mic.user_muted
             self.log(f"mic {'muted' if self.mic.user_muted else 'on'}")
@@ -508,13 +516,15 @@ class Pumpkin:
 
     def _save(self):
         STATE_FILE.write_text(json.dumps({"gaze_flip": self.gaze_flip, "calib": self.calib, "face_warp": self.face_warp,
-                                          "window_calib": self.window_calib}))
+                                          "window_calib": self.window_calib,
+                                          "volume": Speaker.volume}))
 
     def status(self):
         people, _, _, _ = self.vision.state()
         st = {"state": self.state, "people": len(people), "detect_ms": round(self.vision.detect_ms),
               "fake": self.cfg["claude"]["fake"], "model": self.cfg["claude"]["model"],
               "mic_muted": self.mic.user_muted,
+              "volume": round(Speaker.volume * 100),
               "creature": (self.show.on_stage or {}).get("name") if self.show else None,
               "creature_window": self.show.screen if self.show else None,
               "windows": list(self.screens) if self.show else [],
