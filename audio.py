@@ -298,17 +298,43 @@ class EspeakTTS:
             return np.frombuffer(w.readframes(w.getnframes()), np.int16), w.getframerate()
 
 
+class _WithBackup:
+    """Uses the cloud voice, and the local one for any sentence the cloud voice fails on."""
+
+    def __init__(self, main, backup, name, log):
+        self.main, self.backup, self.name, self.log = main, backup, name, log
+        self.warned = 0
+
+    def synth(self, text):
+        try:
+            return self.main.synth(text)
+        except Exception as exc:
+            if time.time() - self.warned > 60:
+                detail = exc.read().decode(errors="replace")[:200] if hasattr(exc, "read") else ""
+                self.log(f"voice: {self.name} failed ({exc} {detail}); using the backup voice")
+                self.warned = time.time()
+            return self.backup.synth(text)
+
+
 def make_tts(cfg, log):
     engines = {"piper": PiperTTS, "openai": OpenAITTS, "elevenlabs": ElevenLabsTTS, "espeak": EspeakTTS}
     order = [cfg["engine"]] + [e for e in ("piper", "espeak") if e != cfg["engine"]]
     if cfg["engine"] == "none" or not sd:
         log("voice: no audio output; the face will mouth the words silently")
         return None
-    for name in order:
+    for i, name in enumerate(order):
         try:
-            return engines[name](cfg, log)
+            tts = engines[name](cfg, log)
         except Exception as exc:
             log(f"voice: {name} unavailable ({exc})")
+            continue
+        if name in ("openai", "elevenlabs"):   # cloud voice: keep a local one for when it fails (no credit, no internet)
+            for backup in order[i + 1:]:
+                try:
+                    return _WithBackup(tts, engines[backup](cfg, log), name, log)
+                except Exception:
+                    pass
+        return tts
     log("voice: no TTS engine available; the face will mouth the words silently")
     return None
 
