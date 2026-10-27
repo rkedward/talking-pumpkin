@@ -69,7 +69,10 @@ DEFAULTS = {
         "openai_instructions": "You are Jack, a jolly, theatrical talking jack-o'-lantern on a porch on Halloween "
                                "night. Sound delighted and full of energy, like a big, bubbly, larger-than-life "
                                "uncle who can't stop smiling. Speak at a brisk, lively pace with a bright, "
-                               "bouncy tone, and burst into a big belly laugh when the text laughs.",
+                               "bouncy tone. Words like 'Ho ho ho' or 'Ha ha ha' are laughter: never read them out as "
+                               "words, actually laugh out loud, a big, breathy, rolling belly laugh that "
+                               "bubbles up naturally from the joke before it.",
+        "laugh_dir": "sounds/laughs", # .wav laugh recordings: played instead of spoken "Ho ho ho!" when present
         "openai_speed": 1.1,          # 1.0 = normal; up to about 1.25 before it sounds rushed
         "elevenlabs_voice_id": "",
         "elevenlabs_model": "eleven_flash_v2_5",

@@ -4,6 +4,7 @@ ElevenLabs or espeak) with mouth movement driven by the actual loudness of the a
 import io
 import json
 import queue
+import random
 import re
 import shutil
 import subprocess
@@ -364,6 +365,23 @@ def _trim(audio, rate, threshold=300, keep_s=0.04):
     return audio[max(0, loud[0] - keep): loud[-1] + keep]
 
 
+_LAUGH = re.compile(r"^\W*((ha|ho|hee|he|heh|hah|mwa|mwah)\W*)+$", re.I)
+
+
+def _is_laugh(sentence):
+    return bool(_LAUGH.match(sentence))
+
+
+def _load_wav(path):
+    with wave.open(str(path)) as w:
+        if w.getsampwidth() != 2:
+            raise ValueError("needs 16-bit audio")
+        audio = np.frombuffer(w.readframes(w.getnframes()), np.int16)
+        if w.getnchannels() > 1:
+            audio = audio.reshape(-1, w.getnchannels()).mean(axis=1).astype(np.int16)
+        return audio, w.getframerate()
+
+
 def _sentences(text):
     return [s.strip() for s in re.findall(r"[^.!?]+[.!?]*", text) if s.strip()] or [text]
 
@@ -389,16 +407,37 @@ class Speaker:
         self.pause = float(cfg.get("sentence_pause", 0.35))
         self.question_pause = float(cfg.get("question_pause", 1.0))   # longer beat after a question
         self.lead_in = float(cfg.get("lead_in", 0.3))
+        self.laughs = []   # recorded laughs, played instead of a spoken "Ho ho ho!"
+        folder = resolve(cfg.get("laugh_dir", "sounds/laughs"))
+        for path in sorted(folder.glob("*.wav")) if folder.is_dir() else []:
+            try:
+                self.laughs.append(_load_wav(path))
+            except Exception as exc:
+                log(f"laugh {path.name} skipped ({exc})")
+        if self.laughs:
+            log(f"voice: {len(self.laughs)} recorded laughs")
 
     def speak(self, text, on_level, on_sentence=None, should_stop=lambda: False):
         sentences = _sentences(text)
+        if not self.laughs and getattr(self.tts, "cloud", False):
+            # Spoken on its own, "Ho ho ho!" gets read out as words; said right after the joke, the voice laughs.
+            merged = []
+            for s in sentences:
+                if merged and _is_laugh(s):
+                    merged[-1] += " " + s
+                else:
+                    merged.append(s)
+            sentences = merged
         ready = queue.Queue()
 
         def make(s):
             if should_stop():
                 return s, None, None
             try:
-                audio, rate = self.tts.synth(s) if self.tts else (None, None)
+                if self.laughs and _is_laugh(s):
+                    audio, rate = random.choice(self.laughs)
+                else:
+                    audio, rate = self.tts.synth(s) if self.tts else (None, None)
                 if audio is not None and len(audio):
                     audio = _trim(audio, rate)
                     pause = self.question_pause if s.rstrip().endswith("?") else self.pause
