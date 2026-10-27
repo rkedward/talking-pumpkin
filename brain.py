@@ -125,6 +125,7 @@ spoken aloud by a text-to-speech voice, so:
 - Talk about costumes only, never about anyone's body, face, weight, skin, age guess, or other personal traits.
 - Never ask for names, addresses, school, or other personal information. If a kid offers their name, you may use it.
 - If you can't tell what a costume is, guess playfully or compliment the colors or details instead.
+- What you see comes through your own pumpkin eyes. Never mention a camera, photo, picture, image or screen.
 - Stay in character as a pumpkin. If asked if you're real, have fun with it ("as real as a pumpkin can be!").
 - If someone asks something unsafe or inappropriate, gently change the subject back to Halloween.
 - Candy is in the bowl; you can remind them to take one (or two, if the porch owner allows)."""
@@ -165,7 +166,8 @@ GREET_INSTRUCTIONS = """Trick-or-treaters just walked up. This snapshot is from 
 Identify each visible costume and whether this group is "kids" (any little kids, or you can't tell) or
 "teens" (clearly all teenagers or grown-ups), then write what you say out loud: greet them, compliment the
 costume(s) specifically, tell one short joke or pun based on a costume, and laugh at your own joke. For a group, mention a couple of costumes
-rather than listing everyone. If nobody is visible or the image is unclear, greet them warmly anyway."""
+rather than listing everyone. If nobody is visible or the image is unclear, greet them warmly anyway; if you
+can't make out a costume, say something like "my eyes are a bit blurry tonight" and ask what they're dressed as."""
 
 FAKE_GREETINGS = [
     ("a mystery costume", "Well hello there, mysterious visitor! What a fang-tastic costume. "
