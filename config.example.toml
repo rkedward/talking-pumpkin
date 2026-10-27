@@ -28,6 +28,7 @@ model = "base.en"              # tiny.en = faster, small.en = more accurate
 engine = "piper"               # piper | elevenlabs | espeak | none
 piper_voice = "models/voices/en_US-ryan-medium.onnx"
 pitch_semitones = -2.0
+# question_pause = 1.0         # seconds of silence after a question (sentence_pause = 0.35 after others)
 # For ElevenLabs: engine = "elevenlabs", put ELEVENLABS_API_KEY=... in .env, and set:
 # elevenlabs_voice_id = "your-voice-id"
 

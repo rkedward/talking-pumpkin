@@ -56,6 +56,7 @@ DEFAULTS = {
         "engine": "piper",            # piper | elevenlabs | espeak | none
         "output_device": "",          # part of the output device name; empty = default
         "sentence_pause": 0.35,       # seconds of silence after each sentence
+        "question_pause": 1.0,        # seconds of silence after a question
         "output_latency": 0.25,       # speaker buffer, seconds: raise (0.4) if speech is choppy, lower for tighter lip sync
         "piper_voice": "models/voices/en_US-ryan-medium.onnx",
         "piper_length_scale": 1.15,   # >1 is slower

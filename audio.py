@@ -315,6 +315,7 @@ class Speaker:
         self.latency = float(cfg.get("output_latency", 0.25))
         # Each sentence is synthesized on its own, which trims the natural pause after it; add one back.
         self.pause = float(cfg.get("sentence_pause", 0.35))
+        self.question_pause = float(cfg.get("question_pause", 1.0))   # longer beat after a question
         self.lead_in = float(cfg.get("lead_in", 0.3))
 
     def speak(self, text, on_level, on_sentence=None, should_stop=lambda: False):
@@ -327,8 +328,9 @@ class Speaker:
                     break
                 try:
                     audio, rate = self.tts.synth(s) if self.tts else (None, None)
-                    if audio is not None and len(audio) and self.pause > 0:
-                        audio = np.concatenate([audio, np.zeros(int(rate * self.pause), np.int16)])
+                    pause = self.question_pause if s.rstrip().endswith("?") else self.pause
+                    if audio is not None and len(audio) and pause > 0:
+                        audio = np.concatenate([audio, np.zeros(int(rate * pause), np.int16)])
                 except Exception as exc:
                     self.log(f"voice error: {exc}")
                     audio, rate = None, None
