@@ -305,6 +305,7 @@ class Speaker:
         self.latency = float(cfg.get("output_latency", 0.25))
         # Each sentence is synthesized on its own, which trims the natural pause after it; add one back.
         self.pause = float(cfg.get("sentence_pause", 0.35))
+        self.lead_in = float(cfg.get("lead_in", 0.3))
 
     def speak(self, text, on_level, on_sentence=None, should_stop=lambda: False):
         sentences = _sentences(text)
@@ -325,20 +326,47 @@ class Speaker:
             ready.put(None)
 
         threading.Thread(target=producer, daemon=True).start()
-        while True:
-            item = ready.get()
-            if item is None or should_stop():
-                break
-            sentence, audio, rate = item
-            if on_sentence:
-                on_sentence(sentence)
-            if audio is None or len(audio) == 0:
-                self._mime(sentence, on_level, should_stop)
-            else:
-                self._play(audio, rate, on_level, should_stop)
-        on_level(0.0)
+        # One output stream for the whole reply. Opening a new one per sentence let the USB speaker (and
+        # PipeWire, which suspends idle outputs) wake up late and swallow the first word of each sentence.
+        stream, stream_rate = None, None
+        try:
+            while True:
+                item = ready.get()
+                if item is None or should_stop():
+                    break
+                sentence, audio, rate = item
+                if on_sentence:
+                    on_sentence(sentence)
+                if audio is None or len(audio) == 0:
+                    self._mime(sentence, on_level, should_stop)
+                    continue
+                if stream is None or rate != stream_rate:
+                    if stream is not None:
+                        self._close(stream)
+                    stream, stream_rate = self._open(rate), rate
+                    # lead-in silence so the speaker is awake before the first word
+                    stream.write(np.zeros(int(rate * self.lead_in), np.int16))
+                self._play(stream, audio, rate, on_level, should_stop)
+        finally:
+            if stream is not None:
+                self._close(stream)
+            on_level(0.0)
 
-    def _play(self, audio, rate, on_level, should_stop):
+    def _open(self, rate):
+        stream = sd.OutputStream(samplerate=rate, channels=1, dtype="int16", device=self.device,
+                                 blocksize=max(1, int(rate * self.BLOCK_S)), latency=self.latency)
+        stream.start()
+        return stream
+
+    def _close(self, stream):
+        try:
+            time.sleep(stream.latency or 0)   # let the buffered tail play out
+            stream.stop()
+            stream.close()
+        except Exception:
+            pass
+
+    def _play(self, stream, audio, rate, on_level, should_stop):
         block = max(1, int(rate * self.BLOCK_S))
         n_blocks = int(np.ceil(len(audio) / block))
         padded = np.zeros(n_blocks * block, np.int16)
@@ -347,19 +375,13 @@ class Speaker:
         rms = np.sqrt(np.mean(blocks.astype(np.float32) ** 2, axis=1))
         ref = max(np.percentile(rms, 90), 1.0)
         levels = np.clip(rms / ref, 0, 1) ** 0.6
-        self.mic.mute_for(len(audio) / rate + 0.4)   # don't listen to ourselves
-        with sd.OutputStream(samplerate=rate, channels=1, dtype="int16", device=self.device,
-                             blocksize=block, latency=self.latency) as stream:
-            delay = int(round((stream.latency or 0) / self.BLOCK_S))  # blocks written but not yet heard
-            for i in range(n_blocks):
-                if should_stop():
-                    break
-                stream.write(blocks[i])
-                on_level(float(levels[i - delay]) if i >= delay else 0.0)
-            for i in range(max(0, n_blocks - delay), n_blocks):
-                on_level(float(levels[i]))
-                time.sleep(self.BLOCK_S)
-        on_level(0.0)
+        self.mic.mute_for(len(audio) / rate + (stream.latency or 0) + 0.6)   # don't listen to ourselves
+        delay = int(round((stream.latency or 0) / self.BLOCK_S))  # blocks written but not yet heard
+        for i in range(n_blocks):
+            if should_stop():
+                break
+            stream.write(blocks[i])
+            on_level(float(levels[i - delay]) if i >= delay else 0.0)
 
     def _mime(self, sentence, on_level, should_stop):
         """No audio available: move the mouth at a speaking pace so the face still 'talks'."""
