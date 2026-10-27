@@ -520,6 +520,8 @@ class Pumpkin:
                                           "volume": Speaker.volume}))
 
     def status(self):
+        if not hasattr(self, "listener"):   # the debug panel can ask while the camera and mic are still starting
+            return {"state": "starting", "people": 0, "volume": round(Speaker.volume * 100)}
         people, _, _, _ = self.vision.state()
         st = {"state": self.state, "people": len(people), "detect_ms": round(self.vision.detect_ms),
               "fake": self.cfg["claude"]["fake"], "model": self.cfg["claude"]["model"],
@@ -535,6 +537,8 @@ class Pumpkin:
         return st
 
     def debug_jpeg(self):
+        if not hasattr(self, "listener"):
+            return None
         return self.vision.debug_jpeg(self.doa.bearing(max_age=1.5) if self.doa and self.doa.available else None)
 
 
