@@ -53,7 +53,7 @@ DEFAULTS = {
         "threads": 4,
     },
     "tts": {
-        "engine": "piper",            # piper | elevenlabs | espeak | none
+        "engine": "piper",            # piper | openai | elevenlabs | espeak | none
         "output_device": "",          # part of the output device name; empty = default
         "sentence_pause": 0.35,       # seconds of silence after each sentence
         "question_pause": 1.0,        # seconds of silence after a question
@@ -61,6 +61,11 @@ DEFAULTS = {
         "piper_voice": "models/voices/en_US-ryan-medium.onnx",
         "piper_length_scale": 1.15,   # >1 is slower
         "pitch_semitones": -2.0,      # deepen the voice a little (piper/espeak); 0 = off
+        "openai_voice": "cedar",      # cedar, marin, ash, ballad, coral, echo, fable, onyx, sage, verse ...
+        "openai_model": "gpt-4o-mini-tts",
+        "openai_instructions": "You are Jack, a jolly, theatrical talking jack-o'-lantern on a porch on Halloween "
+                               "night. Speak warmly and playfully, like a big-hearted storyteller, at a relaxed, "
+                               "natural pace. Laugh heartily when the text laughs.",
         "elevenlabs_voice_id": "",
         "elevenlabs_model": "eleven_flash_v2_5",
         "espeak_voice": "en-us+m3",

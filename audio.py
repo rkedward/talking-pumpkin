@@ -1,5 +1,5 @@
-"""Speech in (mic + voice activity detection + local Whisper) and speech out (Piper neural TTS, ElevenLabs
-or espeak) with mouth movement driven by the actual loudness of the audio being played."""
+"""Speech in (mic + voice activity detection + local Whisper) and speech out (Piper neural TTS, OpenAI,
+ElevenLabs or espeak) with mouth movement driven by the actual loudness of the audio being played."""
 
 import io
 import json
@@ -252,6 +252,34 @@ class ElevenLabsTTS:
             return np.frombuffer(r.read(), np.int16), self.RATE
 
 
+class OpenAITTS:
+    """OpenAI's natural voices (the same family as ChatGPT's). Needs OPENAI_API_KEY from platform.openai.com;
+    a ChatGPT subscription doesn't include API use."""
+
+    RATE = 24000   # response_format "pcm" is 24 kHz, 16-bit, mono
+
+    def __init__(self, cfg, log):
+        import os
+        self.key = os.environ.get("OPENAI_API_KEY", "")
+        if not self.key:
+            raise RuntimeError("put OPENAI_API_KEY=... in .env")
+        self.voice = cfg["openai_voice"]
+        self.model = cfg["openai_model"]
+        self.instructions = cfg["openai_instructions"]
+        log(f"voice: OpenAI {self.model} {self.voice}")
+
+    def synth(self, text):
+        body = {"model": self.model, "voice": self.voice, "input": text, "response_format": "pcm"}
+        if self.instructions and not self.model.startswith("tts-1"):
+            body["instructions"] = self.instructions
+        req = urllib.request.Request(
+            "https://api.openai.com/v1/audio/speech", data=json.dumps(body).encode(),
+            headers={"Authorization": f"Bearer {self.key}", "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            data = r.read()
+        return np.frombuffer(data[:len(data) // 2 * 2], np.int16), self.RATE
+
+
 class EspeakTTS:
     """Robotic but zero-setup fallback (sudo apt install espeak-ng)."""
 
@@ -271,7 +299,7 @@ class EspeakTTS:
 
 
 def make_tts(cfg, log):
-    engines = {"piper": PiperTTS, "elevenlabs": ElevenLabsTTS, "espeak": EspeakTTS}
+    engines = {"piper": PiperTTS, "openai": OpenAITTS, "elevenlabs": ElevenLabsTTS, "espeak": EspeakTTS}
     order = [cfg["engine"]] + [e for e in ("piper", "espeak") if e != cfg["engine"]]
     if cfg["engine"] == "none" or not sd:
         log("voice: no audio output; the face will mouth the words silently")

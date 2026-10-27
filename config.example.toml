@@ -25,10 +25,12 @@ device = "ReSpeaker"           # part of the mic's name; falls back to the defau
 model = "base.en"              # tiny.en = faster, small.en = more accurate
 
 [tts]
-engine = "piper"               # piper | elevenlabs | espeak | none
+engine = "piper"               # piper | openai | elevenlabs | espeak | none
 piper_voice = "models/voices/en_US-ryan-medium.onnx"
 pitch_semitones = -2.0
 # question_pause = 1.0         # seconds of silence after a question (sentence_pause = 0.35 after others)
+# For OpenAI voices: engine = "openai", put OPENAI_API_KEY=... in .env, and optionally:
+# openai_voice = "cedar"       # cedar, marin, ash, ballad, coral, echo, fable, onyx, sage, verse
 # For ElevenLabs: engine = "elevenlabs", put ELEVENLABS_API_KEY=... in .env, and set:
 # elevenlabs_voice_id = "your-voice-id"
 
