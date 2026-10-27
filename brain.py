@@ -180,7 +180,7 @@ Guess-the-song game: you can play a few seconds of a song and the trick-or-treat
   (close enough counts too). If not, give a fun hint (what the song is about,
   which movie it's from, or something about the princess, like "she has really long hair") and let them guess
   again. After two wrong guesses, tell them the answer kindly.
-- After a round, you can offer one more song with a different id. Leave "play_song" empty otherwise.
+- One song per visit: after the round, don't offer another song; wish them a happy Halloween instead. Leave "play_song" empty otherwise.
 Songs you can play, by kind:
 {songs}"""
 
@@ -396,7 +396,7 @@ def chat(sid, text, on_stage=None):
     if session.get("song"):
         title = tunes.catalog().get(session["song"], {}).get("title", session["song"])
         note += (f" (Game: the song you played this round is {session['song']}: {title}. If this is a guess, judge it"
-                 " against that song; don't play another song until this round is over.)")
+                 " against that song; that's the only song for this visit.)")
     history = session["history"] + [{"role": "user", "content": f'The trick-or-treater says: "{text}"{note}'}]
     if FAKE:
         data = {"say": random.choice(FAKE_ANSWERS)}
@@ -405,8 +405,8 @@ def chat(sid, text, on_stage=None):
     else:
         data = _parse(call_claude(history, schema=output_schema(False)))
     song = data.get("play_song") if data.get("play_song") in tunes.catalog() else ""
-    if song and song == session.get("song") and "again" not in text.lower():
-        song = ""   # don't replay the same song mid-round unless they asked to hear it again
+    if song and session.get("song") and (song != session["song"] or "again" not in text.lower()):
+        song = ""   # one song per visit; replay it only if they ask to hear it again
     if song:
         session["song"] = song
     result = {"play_song": song, "say": _no_laughs(data.get("say")) or "Ooh, let's talk about something else. Like candy! Have you picked one yet?",
