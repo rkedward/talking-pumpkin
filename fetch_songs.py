@@ -51,7 +51,7 @@ def main():
         index = {}
     redo = "--all" in sys.argv
     only = [a for a in sys.argv[1:] if not a.startswith("--")]   # song ids to fetch again
-    for sid, (title, artist, kind, teens) in tunes.REAL.items():
+    for sid, (title, artist, kind, teens, _who) in tunes.REAL.items():
         out = tunes.CLIPS / f"{sid}.wav"
         if only and sid not in only:
             continue

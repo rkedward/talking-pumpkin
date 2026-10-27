@@ -80,31 +80,31 @@ GENRES = {
 }
 TEENS_ONLY = {"jaws", "toccata", "halloween"}
 
-# Real recordings fetch_songs.py looks for: id -> (title (movie), artist, kind, teens_only).
+# Real recordings fetch_songs.py looks for: id -> (title (movie), artist, kind, teens_only, who sings it).
 REAL = {
-    "let_it_go": ("Let It Go (Frozen)", "Idina Menzel", "Disney princess songs", False),
-    "snowman": ("Do You Want to Build a Snowman? (Frozen)", "Kristen Bell", "Disney princess songs", False),
-    "first_time": ("For the First Time in Forever (Frozen)", "Kristen Bell", "Disney princess songs", False),
-    "into_the_unknown": ("Into the Unknown (Frozen 2)", "Idina Menzel", "Disney princess songs", False),
-    "how_far": ("How Far I'll Go (Moana)", "Auli'i Cravalho", "Disney princess songs", False),
-    "part_of_your_world": ("Part of Your World (The Little Mermaid)", "Jodi Benson", "Disney princess songs", False),
-    "under_the_sea": ("Under the Sea (The Little Mermaid)", "Samuel E. Wright", "Disney princess songs", False),
-    "be_our_guest": ("Be Our Guest (Beauty and the Beast)", "Jerry Orbach", "Disney princess songs", False),
-    "beauty_beast": ("Beauty and the Beast (Beauty and the Beast)", "Angela Lansbury", "Disney princess songs", False),
-    "whole_new_world": ("A Whole New World (Aladdin)", "Lea Salonga", "Disney princess songs", False),
-    "life_begin": ("When Will My Life Begin (Tangled)", "Mandy Moore", "Disney princess songs", False),
-    "see_the_light": ("I See the Light (Tangled)", "Mandy Moore", "Disney princess songs", False),
-    "colors_wind": ("Colors of the Wind (Pocahontas)", "Judy Kuhn", "Disney princess songs", False),
-    "reflection": ("Reflection (Mulan)", "Lea Salonga", "Disney princess songs", False),
-    "make_a_man": ("I'll Make a Man Out of You (Mulan)", "Donny Osmond", "Disney princess songs", False),
-    "almost_there": ("Almost There (The Princess and the Frog)", "Anika Noni Rose", "Disney princess songs", False),
-    "bibbidi": ("Bibbidi-Bobbidi-Boo (Cinderella)", "Verna Felton", "Disney princess songs", False),
-    "once_upon_dream": ("Once Upon a Dream (Sleeping Beauty)", "Mary Costa", "Disney princess songs", False),
-    "someday_prince": ("Someday My Prince Will Come (Snow White)", "Adriana Caselotti", "Disney princess songs", False),
-    "belle": ("Belle (Beauty and the Beast)", "Paige O'Hara", "Disney princess songs", False),
-    "dream_wish": ("A Dream Is a Wish Your Heart Makes (Cinderella)", "Ilene Woods", "Disney princess songs", False),
-    "whistle": ("Whistle While You Work (Snow White)", "Adriana Caselotti", "Disney princess songs", False),
-    "touch_the_sky": ("Touch the Sky (Brave)", "Julie Fowlis", "Disney princess songs", False),
+    "let_it_go": ("Let It Go (Frozen)", "Idina Menzel", "Disney princess songs", False, "Elsa"),
+    "snowman": ("Do You Want to Build a Snowman? (Frozen)", "Kristen Bell", "Disney princess songs", False, "Anna"),
+    "first_time": ("For the First Time in Forever (Frozen)", "Kristen Bell", "Disney princess songs", False, "Anna and Elsa"),
+    "into_the_unknown": ("Into the Unknown (Frozen 2)", "Idina Menzel", "Disney princess songs", False, "Elsa"),
+    "how_far": ("How Far I'll Go (Moana)", "Auli'i Cravalho", "Disney princess songs", False, "Moana"),
+    "part_of_your_world": ("Part of Your World (The Little Mermaid)", "Jodi Benson", "Disney princess songs", False, "Ariel"),
+    "under_the_sea": ("Under the Sea (The Little Mermaid)", "Samuel E. Wright", "Disney princess songs", False, "Sebastian the crab, for Ariel"),
+    "be_our_guest": ("Be Our Guest (Beauty and the Beast)", "Jerry Orbach", "Disney princess songs", False, "Lumiere, for Belle"),
+    "beauty_beast": ("Beauty and the Beast (Beauty and the Beast)", "Angela Lansbury", "Disney princess songs", False, "Mrs. Potts, about Belle and the Beast"),
+    "whole_new_world": ("A Whole New World (Aladdin)", "Lea Salonga", "Disney princess songs", False, "Aladdin and Jasmine"),
+    "life_begin": ("When Will My Life Begin (Tangled)", "Mandy Moore", "Disney princess songs", False, "Rapunzel"),
+    "see_the_light": ("I See the Light (Tangled)", "Mandy Moore", "Disney princess songs", False, "Rapunzel and Flynn"),
+    "colors_wind": ("Colors of the Wind (Pocahontas)", "Judy Kuhn", "Disney princess songs", False, "Pocahontas"),
+    "reflection": ("Reflection (Mulan)", "Lea Salonga", "Disney princess songs", False, "Mulan"),
+    "make_a_man": ("I'll Make a Man Out of You (Mulan)", "Donny Osmond", "Disney princess songs", False, "Shang, for Mulan"),
+    "almost_there": ("Almost There (The Princess and the Frog)", "Anika Noni Rose", "Disney princess songs", False, "Tiana"),
+    "bibbidi": ("Bibbidi-Bobbidi-Boo (Cinderella)", "Verna Felton", "Disney princess songs", False, "Cinderella's Fairy Godmother"),
+    "once_upon_dream": ("Once Upon a Dream (Sleeping Beauty)", "Mary Costa", "Disney princess songs", False, "Aurora"),
+    "someday_prince": ("Someday My Prince Will Come (Snow White)", "Adriana Caselotti", "Disney princess songs", False, "Snow White"),
+    "belle": ("Belle (Beauty and the Beast)", "Paige O'Hara", "Disney princess songs", False, "Belle"),
+    "dream_wish": ("A Dream Is a Wish Your Heart Makes (Cinderella)", "Ilene Woods", "Disney princess songs", False, "Cinderella"),
+    "whistle": ("Whistle While You Work (Snow White)", "Adriana Caselotti", "Disney princess songs", False, "Snow White"),
+    "touch_the_sky": ("Touch the Sky (Brave)", "Julie Fowlis", "Disney princess songs", False, "about Merida"),
 }
 CLIPS = ROOT / "sounds" / "songs"   # <id>.wav plus songs.json, written by fetch_songs.py
 SOURCE = "auto"                     # auto (real clips when fetched, plus music box) | real | musicbox
@@ -123,8 +123,9 @@ def catalog():
                 fetched = {}
             for sid, info in fetched.items():
                 if sid in REAL and (CLIPS / f"{sid}.wav").exists():
-                    found[sid] = {"title": info["title"], "kind": info["kind"], "teens": info.get("teens", False),
-                                  "file": CLIPS / f"{sid}.wav"}
+                    title, _, kind, teens, who = REAL[sid]
+                    found[sid] = {"title": f"{title}, sung by {who}" if who else title, "kind": kind,
+                                  "teens": teens, "file": CLIPS / f"{sid}.wav"}
         if SOURCE == "musicbox" or (SOURCE == "auto") or not found:
             for kind, ids in GENRES.items():
                 for sid in ids:
