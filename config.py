@@ -14,7 +14,8 @@ DEFAULTS = {
         "fake": False,                # canned replies, no API calls (PUMPKIN_FAKE=1 also works)
         "laugh": True,                # false = the pumpkin never says "Ha ha ha!"
         "laugh_text": "Ha ha ha!",
-        "song_game": True,            # offer the "guess the song" game    # how it laughs, e.g. "Ho ho ho!"
+        "song_game": True,            # offer the "guess the song" game
+        "song_source": "auto",        # auto: real song clips (run fetch_songs.py once) plus music box | real | musicbox    # how it laughs, e.g. "Ho ho ho!"
         "provider": "auto",           # claude | openai | auto (Claude if ANTHROPIC_API_KEY is set, else OpenAI)
         "openai_model": "gpt-5-mini", # used when the provider is openai
         "openai_reasoning": "minimal",  # quick answers; "" to leave it to the model

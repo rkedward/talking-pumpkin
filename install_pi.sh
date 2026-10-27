@@ -9,7 +9,7 @@ DIR="$(pwd)"
 echo "== System packages"
 sudo apt-get update
 sudo apt-get install -y python3-venv python3-pip python3-numpy python3-opencv python3-picamera2 \
-  python3-lgpio python3-gpiozero libportaudio2 libusb-1.0-0 espeak-ng i2c-tools dfu-util x11-xserver-utils
+  python3-lgpio python3-gpiozero libportaudio2 libusb-1.0-0 espeak-ng i2c-tools dfu-util x11-xserver-utils ffmpeg
 if ! command -v chromium >/dev/null && ! command -v chromium-browser >/dev/null; then
   sudo apt-get install -y chromium || sudo apt-get install -y chromium-browser
 fi

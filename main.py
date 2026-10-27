@@ -147,11 +147,11 @@ class Pumpkin:
     def play_song(self, song_id):
         """The guessing game's tune; the mouth bobs along as if the pumpkin is humming it."""
         try:
-            audio, rate = tunes.synth(song_id)
+            audio, rate = tunes.load(song_id)
         except Exception as exc:
             self.log(f"song {song_id}: {exc}")
             return
-        self.log(f"🎵 {tunes.SONGS[song_id][0]}", "said")
+        self.log(f"🎵 {tunes.catalog()[song_id]['title']}", "said")
         self.speaking = True
         self.speaker.play_clip(audio, rate, on_level=lambda level: self._set_mouth(level * 0.5),
                                should_stop=lambda: self.abort_visit)

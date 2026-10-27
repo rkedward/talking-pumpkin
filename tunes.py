@@ -1,7 +1,15 @@
-"""Songs for the pumpkin's "guess the song" game: the opening of each melody, played on a music-box sound
-made right here (nothing to download, no account, works offline)."""
+"""Songs for the pumpkin's "guess the song" game.
+
+Two kinds: short clips of real recordings (fetched once with fetch_songs.py from Apple's free 30-second song
+previews and kept on the Pi), and music-box tunes made right here (always available, work offline)."""
+
+import json
+import wave
+from pathlib import Path
 
 import numpy as np
+
+from config import ROOT
 
 RATE = 24000
 
@@ -62,16 +70,85 @@ SONGS = {
                   "C#5:0.5 F#4:0.5 F#4:0.5 C#5:0.5 F#4:0.5 F#4:0.5 C#5:0.5 F#4:0.5 D5:0.5 F#4:0.5"),
 }
 
-# Kinds the pumpkin can offer, and who each song suits ("kids" = fine for little kids; "teens" = too scary or
-# too grown-up for them).
+# Music-box kinds, and which ones are too scary or grown-up for little kids.
 GENRES = {
     "nursery rhymes": ["twinkle", "mary_lamb", "old_macdonald", "row_boat", "itsy_spider", "happy_birthday",
                        "london_bridge", "wheels_bus", "baa_baa"],
-    "movie songs": ["star_wars", "harry_potter", "pink_panther", "jaws"],
+    "movie themes": ["star_wars", "harry_potter", "pink_panther", "jaws"],
     "video game songs": ["super_mario", "tetris"],
-    "spooky songs": ["addams_family", "mountain_king", "funeral_march", "toccata", "halloween"],
+    "spooky tunes": ["addams_family", "mountain_king", "funeral_march", "toccata", "halloween"],
 }
 TEENS_ONLY = {"jaws", "toccata", "halloween"}
+
+# Real recordings fetch_songs.py looks for: id -> (title, artist, kind, teens_only).
+REAL = {
+    "golden": ("Golden", "HUNTR/X", "pop songs", False),
+    "soda_pop": ("Soda Pop", "Saja Boys", "pop songs", False),
+    "happy": ("Happy", "Pharrell Williams", "pop songs", False),
+    "cant_stop_feeling": ("Can't Stop the Feeling!", "Justin Timberlake", "pop songs", False),
+    "shake_it_off": ("Shake It Off", "Taylor Swift", "pop songs", False),
+    "uptown_funk": ("Uptown Funk", "Mark Ronson", "pop songs", False),
+    "baby_shark": ("Baby Shark", "Pinkfong", "kids' songs", False),
+    "let_it_go": ("Let It Go", "Idina Menzel", "movie songs", False),
+    "bruno": ("We Don't Talk About Bruno", "Encanto", "movie songs", False),
+    "how_far": ("How Far I'll Go", "Auli'i Cravalho", "movie songs", False),
+    "friend_in_me": ("You've Got a Friend in Me", "Randy Newman", "movie songs", False),
+    "under_the_sea": ("Under the Sea", "Samuel E. Wright", "movie songs", False),
+    "hakuna_matata": ("Hakuna Matata", "Nathan Lane", "movie songs", False),
+    "monster_mash": ("Monster Mash", "Bobby Pickett", "Halloween songs", False),
+    "ghostbusters": ("Ghostbusters", "Ray Parker Jr.", "Halloween songs", False),
+    "this_is_halloween": ("This Is Halloween", "The Nightmare Before Christmas", "Halloween songs", False),
+    "spooky_skeletons": ("Spooky, Scary Skeletons", "Andrew Gold", "Halloween songs", False),
+    "addams_theme": ("The Addams Family Theme", "Vic Mizzy", "Halloween songs", False),
+    "thriller": ("Thriller", "Michael Jackson", "Halloween songs", True),
+    "somebodys_watching": ("Somebody's Watching Me", "Rockwell", "Halloween songs", True),
+}
+CLIPS = ROOT / "sounds" / "songs"   # <id>.wav plus songs.json, written by fetch_songs.py
+SOURCE = "auto"                     # auto (real clips when fetched, plus music box) | real | musicbox
+_catalog = None
+
+
+def catalog():
+    """id -> {"title", "kind", "teens", "file"} for every song the pumpkin can play right now."""
+    global _catalog
+    if _catalog is None:
+        found = {}
+        if SOURCE in ("auto", "real"):
+            try:
+                fetched = json.loads((CLIPS / "songs.json").read_text())
+            except Exception:
+                fetched = {}
+            for sid, info in fetched.items():
+                if (CLIPS / f"{sid}.wav").exists():
+                    found[sid] = {"title": info["title"], "kind": info["kind"], "teens": info.get("teens", False),
+                                  "file": CLIPS / f"{sid}.wav"}
+        if SOURCE == "musicbox" or (SOURCE == "auto") or not found:
+            for kind, ids in GENRES.items():
+                for sid in ids:
+                    found.setdefault(sid, {"title": SONGS[sid][0], "kind": kind, "teens": sid in TEENS_ONLY,
+                                           "file": None})
+        _catalog = found
+    return _catalog
+
+
+def kinds():
+    out = {}
+    for sid, info in catalog().items():
+        out.setdefault(info["kind"], []).append(sid)
+    return out
+
+
+def load(song_id):
+    """(int16 mono audio, rate) for a song in the catalog."""
+    info = catalog()[song_id]
+    if info["file"]:
+        with wave.open(str(info["file"])) as w:
+            audio = np.frombuffer(w.readframes(w.getnframes()), np.int16)
+            if w.getnchannels() > 1:
+                audio = audio.reshape(-1, w.getnchannels()).mean(axis=1).astype(np.int16)
+            return audio, w.getframerate()
+    return synth(song_id)
+
 
 _STEPS = {"C": -9, "D": -7, "E": -5, "F": -4, "G": -2, "A": 0, "B": 2}
 

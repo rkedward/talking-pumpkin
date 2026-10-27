@@ -4,3 +4,5 @@ config.toml
 state.json
 models/*
 !models/efficientdet_lite0.tflite
+sounds/songs/
+sounds/laughs/*.wav

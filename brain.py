@@ -36,6 +36,7 @@ def configure(cfg, creatures=(), windows=None, online=None):
     LAUGH = bool(cfg.get("laugh", True))
     global LAUGH_TEXT, GAME
     GAME = bool(cfg.get("song_game", True))
+    tunes.SOURCE = cfg.get("song_source", "auto")
     LAUGH_TEXT = cfg.get("laugh_text") or LAUGH_TEXT
     OPENAI_MODEL, OPENAI_REASONING = cfg.get("openai_model", OPENAI_MODEL), cfg.get("openai_reasoning", "")
     CREATURES, WINDOWS = list(creatures), dict(windows or {})
@@ -95,7 +96,7 @@ def output_schema(with_costumes):
     props = {"say": {"type": "string", "description": "Exactly what the pumpkin says aloud."}}
     required = ["say"]
     if GAME and not with_costumes:
-        props["play_song"] = {"type": "string", "enum": [""] + list(tunes.SONGS),
+        props["play_song"] = {"type": "string", "enum": [""] + list(tunes.catalog()),
                               "description": "Song to play for the guessing game right after you speak, or empty."}
         required.append("play_song")
     if with_costumes:
@@ -158,20 +159,20 @@ TRAIL_LAUGH = re.compile(r"[\s,\-]+(?:" + _LAUGH_WORD + r")+([.!?]*)$", re.I)
 def game_prompt():
     if not GAME:
         return ""
+    cat = tunes.catalog()
     kinds = []
-    for genre, ids in tunes.GENRES.items():
-        listed = ", ".join(f"{sid} ({tunes.SONGS[sid][0]}{', teens only' if sid in tunes.TEENS_ONLY else ''})"
-                           for sid in ids)
-        kinds.append(f"- {genre}: {listed}")
+    for kind, ids in tunes.kinds().items():
+        listed = ", ".join(f"{sid} ({cat[sid]['title']}{', teens only' if cat[sid]['teens'] else ''})" for sid in ids)
+        kinds.append(f"- {kind}: {listed}")
     songs = "\n".join(kinds)
     return f"""
 
-Guess-the-song game: you can play the opening of a song on your music box and the trick-or-treaters guess it.
+Guess-the-song game: you can play a few seconds of a song and the trick-or-treaters guess it.
 - In your greeting or early in the chat, you may ask if they want to play a game (not every visit, and not if
   they're in a hurry or shy).
-- Pick songs that suit the group: little kids get nursery rhymes, video game songs, and the gentler movie and
-  spooky tunes; older kids, teens and grown-ups can get anything. Songs marked "teens only" are never for little
-  kids. You can ask which kind they'd like to hear ({", ".join(tunes.GENRES)}).
+- Pick songs that suit the group: little kids get kids' songs, nursery rhymes, movie and video game songs and
+  the friendlier Halloween ones; older kids, teens and grown-ups can get anything. Songs marked "teens only" are never for little
+  kids. You can ask which kind they'd like to hear ({", ".join(tunes.kinds())}).
 - When they say yes (or ask for a song), say something short like "Listen closely!" in "say" and set
   "play_song" to a song id; the tune plays right after you speak. Never say the title before they guess.
 - On their guess: cheer if they're right (close enough counts). If not, give a fun hint (what the song is about,
@@ -396,7 +397,7 @@ def chat(sid, text, on_stage=None):
             data["creature_says"] = "Ooooh, I agree with the pumpkin!"
     else:
         data = _parse(call_claude(history, schema=output_schema(False)))
-    song = data.get("play_song") if data.get("play_song") in tunes.SONGS else ""
+    song = data.get("play_song") if data.get("play_song") in tunes.catalog() else ""
     result = {"play_song": song, "say": _no_laughs(data.get("say")) or "Ooh, let's talk about something else. Like candy! Have you picked one yet?",
               **_sideshow_fields(data)}
     with _lock:
