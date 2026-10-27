@@ -242,7 +242,7 @@ The most useful ones:
 
 | Setting | Default | What it does |
 |---|---|---|
-| `[claude] model` | `claude-opus-5-5` | `claude-haiku-4-5` replies faster. |
+| `[claude] model` | `claude-opus-5-5` | `claude-haiku-5-5` replies faster. |
 | `[camera] hfov_deg` | 66 | Camera's horizontal field of view (Camera Module 3 Wide: 102). Used to match voices to people. |
 | `[detector] min_height` | 0.25 | Smallest person (fraction of frame height) that counts as a visitor. |
 | `[visit] max_turns`, `max_visit_s` | 5, 90 | Wrap up so the line keeps moving. |

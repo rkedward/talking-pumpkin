@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parent
 
 DEFAULTS = {
     "claude": {
-        "model": "claude-opus-5-5",   # claude-haiku-4-5 answers faster
+        "model": "claude-opus-5-5",   # claude-haiku-5-5 answers faster
         "effort": "low",
         "fake": False,                # canned replies, no API calls (PUMPKIN_FAKE=1 also works)
         "provider": "auto",           # claude | openai | auto (Claude if ANTHROPIC_API_KEY is set, else OpenAI)
