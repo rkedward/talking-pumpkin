@@ -16,6 +16,7 @@ MODEL = "claude-opus-5-5"
 EFFORT = "low"
 FAKE = False
 LAUGH = True             # [claude] laugh: false = no "Ha ha ha!" lines at all
+LAUGH_TEXT = "Ha ha ha!" # [claude] laugh_text: how the pumpkin writes its laugh
 PROVIDER = "claude"      # claude | openai
 OPENAI_MODEL = "gpt-5-mini"
 OPENAI_REASONING = "minimal"
@@ -30,6 +31,8 @@ def configure(cfg, creatures=(), windows=None, online=None):
     PROVIDER = cfg.get("provider", "claude")
     global LAUGH
     LAUGH = bool(cfg.get("laugh", True))
+    global LAUGH_TEXT
+    LAUGH_TEXT = cfg.get("laugh_text") or LAUGH_TEXT
     OPENAI_MODEL, OPENAI_REASONING = cfg.get("openai_model", OPENAI_MODEL), cfg.get("openai_reasoning", "")
     CREATURES, WINDOWS = list(creatures), dict(windows or {})
     ONLINE = online or (lambda: list(WINDOWS))
@@ -131,8 +134,8 @@ spoken aloud by a text-to-speech voice, so:
 - Candy is in the bowl; you can remind them to take one (or two, if the porch owner allows)."""
 
 LAUGH_ON = """ After a joke or pun, laugh at it
-  as its own short sentence written out in words, like "Ha ha ha!" or "Ha ha!" (never "Ho ho ho",
-  which sounds like Santa, and never "*laughs*"; the speaker plays a real laugh for it). You can chuckle at a funny costume or question too."""
+  as its own short sentence written out in words: "{laugh_text}" (always that laugh, never "*laughs*").
+  You can chuckle at a funny costume or question too."""
 LAUGH_OFF = """ Show it in your words and delight, but never
   write out laughter ("ha ha", "ho ho", "hee hee") or "*laughs*"."""
 LAUGH_RE = re.compile(r"^\W*((ha|ho|hee|he|heh|hah|mwa|mwah)\W*)+$", re.I)
@@ -145,7 +148,8 @@ TRAIL_LAUGH = re.compile(r"[\s,\-]+(?:" + _LAUGH_WORD + r")+([.!?]*)$", re.I)
 
 
 def persona():
-    return PERSONA.replace("{laugh}", LAUGH_ON if LAUGH else LAUGH_OFF) + sideshow_prompt()
+    laugh = LAUGH_ON.replace("{laugh_text}", LAUGH_TEXT) if LAUGH else LAUGH_OFF
+    return PERSONA.replace("{laugh}", laugh) + sideshow_prompt()
 
 
 def _no_laughs(text):
