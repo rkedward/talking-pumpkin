@@ -67,8 +67,10 @@ DEFAULTS = {
         "openai_voice": "cedar",      # cedar, marin, ash, ballad, coral, echo, fable, onyx, sage, verse ...
         "openai_model": "gpt-4o-mini-tts",
         "openai_instructions": "You are Jack, a jolly, theatrical talking jack-o'-lantern on a porch on Halloween "
-                               "night. Speak warmly and playfully, like a big-hearted storyteller, at a relaxed, "
-                               "natural pace. Laugh heartily when the text laughs.",
+                               "night. Sound delighted and full of energy, like a big, bubbly, larger-than-life "
+                               "uncle who can't stop smiling. Speak at a brisk, lively pace with a bright, "
+                               "bouncy tone, and burst into a big belly laugh when the text laughs.",
+        "openai_speed": 1.1,          # 1.0 = normal; up to about 1.25 before it sounds rushed
         "elevenlabs_voice_id": "",
         "elevenlabs_model": "eleven_flash_v2_5",
         "espeak_voice": "en-us+m3",

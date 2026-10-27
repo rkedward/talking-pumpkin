@@ -266,12 +266,15 @@ class OpenAITTS:
         self.voice = cfg["openai_voice"]
         self.model = cfg["openai_model"]
         self.instructions = cfg["openai_instructions"]
+        self.speed = float(cfg.get("openai_speed", 1.0))
         log(f"voice: OpenAI {self.model} {self.voice}")
 
     def synth(self, text):
         body = {"model": self.model, "voice": self.voice, "input": text, "response_format": "pcm"}
         if self.instructions and not self.model.startswith("tts-1"):
             body["instructions"] = self.instructions
+        if self.speed != 1.0:
+            body["speed"] = self.speed
         req = urllib.request.Request(
             "https://api.openai.com/v1/audio/speech", data=json.dumps(body).encode(),
             headers={"Authorization": f"Bearer {self.key}", "Content-Type": "application/json"})
