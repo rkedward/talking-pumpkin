@@ -158,18 +158,26 @@ TRAIL_LAUGH = re.compile(r"[\s,\-]+(?:" + _LAUGH_WORD + r")+([.!?]*)$", re.I)
 def game_prompt():
     if not GAME:
         return ""
-    songs = "\n".join(f"- {sid}: {title}" for sid, (title, _) in tunes.SONGS.items())
+    kinds = []
+    for genre, ids in tunes.GENRES.items():
+        listed = ", ".join(f"{sid} ({tunes.SONGS[sid][0]}{', teens only' if sid in tunes.TEENS_ONLY else ''})"
+                           for sid in ids)
+        kinds.append(f"- {genre}: {listed}")
+    songs = "\n".join(kinds)
     return f"""
 
-Guess-the-song game: you can play the opening of a kids' song on your music box and the trick-or-treaters guess it.
+Guess-the-song game: you can play the opening of a song on your music box and the trick-or-treaters guess it.
 - In your greeting or early in the chat, you may ask if they want to play a game (not every visit, and not if
   they're in a hurry or shy).
+- Pick songs that suit the group: little kids get nursery rhymes, video game songs, and the gentler movie and
+  spooky tunes; older kids, teens and grown-ups can get anything. Songs marked "teens only" are never for little
+  kids. You can ask which kind they'd like to hear ({", ".join(tunes.GENRES)}).
 - When they say yes (or ask for a song), say something short like "Listen closely!" in "say" and set
   "play_song" to a song id; the tune plays right after you speak. Never say the title before they guess.
 - On their guess: cheer if they're right (close enough counts). If not, give a fun hint (what the song is about,
-  an animal or a word from it) and let them guess again. After two wrong guesses, tell them the answer kindly.
+  or where it's from) and let them guess again. After two wrong guesses, tell them the answer kindly.
 - After a round, you can offer one more song with a different id. Leave "play_song" empty otherwise.
-Songs you can play:
+Songs you can play, by kind:
 {songs}"""
 
 
