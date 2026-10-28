@@ -136,6 +136,8 @@ class Pumpkin:
         if not text:
             return
         self.log(f"🎃 {text}", "said")
+        before = self.state
+        self.set_state("speaking")
         self.speaking = True
         self.speaker.speak(text, on_level=self._set_mouth,
                            on_sentence=self._on_sentence,
@@ -143,6 +145,8 @@ class Pumpkin:
         self.speaking = False
         self.mouth = 0.0
         self.props.expression("happy" if self.awake else "neutral")
+        if before in ("idle", "cooldown"):
+            self.set_state(before)
 
     def play_song(self, song_id):
         """The guessing game's tune; the mouth bobs along as if the pumpkin is humming it."""
@@ -158,9 +162,16 @@ class Pumpkin:
         self.speaking = False
         self.mouth = 0.0
 
+    def mood(self, name):
+        """The feeling of a whole reply, chosen by the brain; the projected face shows it."""
+        self.hub.publish({"t": "mood", "name": name or "happy"})
+
     def _on_sentence(self, sentence):
         expr = self.props.expression_for(sentence)
         self.props.expression(expr)
+        accent = {"quizzical": "curious", "surprised": "excited", "sly": "sly"}.get(expr)
+        if accent:   # this sentence's own look, on top of the reply's mood
+            self.hub.publish({"t": "expr", "name": accent, "ms": int(300 + 330 * len(sentence.split()))})
         if expr == "laughing":   # the face squints and bounces while he laughs at his own joke
             self.hub.publish({"t": "laugh", "ms": int(400 + 280 * len(sentence.split()))})
 
@@ -282,6 +293,7 @@ class Pumpkin:
         if result.get("costumes"):
             self.log(f"costumes: {'; '.join(result['costumes'])}")
         session = result.get("session", "")
+        self.mood(result.get("mood"))
         self.say(result.get("say"))
         self.sideshow(result)
 
@@ -311,6 +323,7 @@ class Pumpkin:
             except Exception as exc:
                 self.log(f"claude error: {type(exc).__name__}: {exc}")
                 reply = {"say": "Ooh, my pumpkin brain went fuzzy. Happy Halloween!"}
+            self.mood(reply.get("mood"))
             self.say(reply["say"])
             self.sideshow(reply)
             if reply.get("play_song") and not self.abort_visit:
@@ -326,6 +339,7 @@ class Pumpkin:
         self.home.send("visit_end")
         self.reveal(False)
         self.awake = False
+        self.mood("neutral")
         self.props.expression("neutral")
 
     def run(self):
@@ -354,8 +368,35 @@ class Pumpkin:
             time.sleep(2.5)
 
     # ---- web interface -------------------------------------------------------------------------
+    def face_demo(self):
+        """Show off each expression: the pumpkin names it while the face makes it."""
+        was_awake, self.awake = self.awake, True
+        try:
+            for mood in brain.MOODS + ["listening", "laughing"]:
+                if self.abort_visit:
+                    break
+                if mood in ("listening", "thinking"):
+                    self.hub.publish({"t": "state", "state": mood})
+                    self.say(mood.capitalize() + ".")
+                    self.hub.publish({"t": "state", "state": mood})   # saying it switched to "speaking"
+                    time.sleep(2)
+                elif mood == "laughing":
+                    self.hub.publish({"t": "laugh", "ms": 2500})
+                    self.say("Laughing!")
+                    time.sleep(1)
+                else:
+                    self.mood(mood)
+                    self.say(mood.capitalize() + "!")
+                    time.sleep(1.5)
+        finally:
+            self.hub.publish({"t": "state", "state": self.state})
+            self.mood("neutral")
+            self.awake = was_awake
+
     def command(self, name, data):
-        if name == "greet":
+        if name == "faces":
+            threading.Thread(target=self.face_demo, daemon=True).start()
+        elif name == "greet":
             self.force_greet = True
             self.log("manual greet")
         elif name == "end":

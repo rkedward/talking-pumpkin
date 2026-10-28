@@ -51,6 +51,11 @@ function connect() {
       overlay.outline(ev.quad);
     } else if (ev.t === "state") {
       state = ev.state;
+      face.setState(ev.state);
+    } else if (ev.t === "mood") {
+      face.setMood(ev.name);
+    } else if (ev.t === "expr") {
+      face.setAccent(ev.name, ev.ms);
     } else if (ev.t === "log") {
       log(ev.text, ev.cls);
     }

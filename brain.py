@@ -92,9 +92,14 @@ the best costume, telling a joke, doing a silly trick), and banter with them. Yo
 - Leave "summon" and "creature_says" empty when not using them.{extra}"""
 
 
+MOODS = ["happy", "excited", "surprised", "curious", "thinking", "sly", "sad", "spooky", "proud"]
+
+
 def output_schema(with_costumes):
-    props = {"say": {"type": "string", "description": "Exactly what the pumpkin says aloud."}}
-    required = ["say"]
+    props = {"say": {"type": "string", "description": "Exactly what the pumpkin says aloud."},
+             "mood": {"type": "string", "enum": MOODS,
+                      "description": "The feeling your face shows while you say it."}}
+    required = ["say", "mood"]
     if GAME and not with_costumes:
         props["play_song"] = {"type": "string", "enum": [""] + list(tunes.catalog()),
                               "description": "Song to play for the guessing game right after you speak, or empty."}
@@ -138,6 +143,9 @@ spoken aloud by a text-to-speech voice, so:
 - Never ask for names, addresses, school, or other personal information. If a kid offers their name, you may use it.
 - If you can't tell what a costume is, guess playfully or compliment the colors or details instead.
 - What you see comes through your own pumpkin eyes. Never mention a camera, photo, picture, image or screen.
+- Your face is animated: pick the "mood" that fits what you're saying (excited for a great costume, curious
+  when you ask something, sly before a punchline, sad-but-silly when they have to leave, spooky for a spooky bit).
+  Vary it; don't stay on "happy" all the time.
 - Stay in character as a pumpkin. If asked if you're real, have fun with it ("as real as a pumpkin can be!").
 - If someone asks something unsafe or inappropriate, gently change the subject back to Halloween.
 - Candy is in the bowl; you can remind them to take one (or two, if the porch owner allows)."""
@@ -368,7 +376,8 @@ def greet(image_b64, people, note=""):
     costumes = data.get("costumes") or []
     say = _no_laughs(data.get("say") or FALLBACK_SAY)
     audience = "teens" if data.get("audience") == "teens" else "kids"
-    result = {"costumes": costumes, "audience": audience, "say": say, **_sideshow_fields(data)}
+    mood = data.get("mood") if data.get("mood") in MOODS else "happy"
+    result = {"costumes": costumes, "audience": audience, "say": say, "mood": mood, **_sideshow_fields(data)}
 
     # Keep a text-only history; the image isn't re-sent on every question.
     seen = ", ".join(costumes) if costumes else "costumes you couldn't make out"
@@ -409,7 +418,7 @@ def chat(sid, text, on_stage=None):
         song = ""   # one song per visit; replay it only if they ask to hear it again
     if song:
         session["song"] = song
-    result = {"play_song": song, "say": _no_laughs(data.get("say")) or "Ooh, let's talk about something else. Like candy! Have you picked one yet?",
+    result = {"mood": data.get("mood") if data.get("mood") in MOODS else "happy", "play_song": song, "say": _no_laughs(data.get("say")) or "Ooh, let's talk about something else. Like candy! Have you picked one yet?",
               **_sideshow_fields(data)}
     with _lock:
         session["history"] = history + [{"role": "assistant", "content": json.dumps(result)}]
