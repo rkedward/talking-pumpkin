@@ -15,7 +15,7 @@ from config import ROOT
 STATIC = ROOT / "static"
 WINDOW_EVENTS = {"creature", "creature_exit", "creature_end", "creature_mouth", "window_calib", "identify",
                  "align_pattern", "align_outline"}
-REMOTE_ONLY = {"say", "set_mood", "play_song", "recent"}   # puppet controls: from the Pi or with PUMPKIN_KEY
+REMOTE_ONLY = {"say", "set_mood", "play_song", "recent", "jump_scare"}   # puppet controls: from the Pi or with PUMPKIN_KEY
 
 
 class Hub:

@@ -239,7 +239,9 @@ Let an AI assistant drive the pumpkin: "make the pumpkin say 'Nice Spider-Man co
 "play the song game", "end the visit", "what did the kids ask him tonight?", "is he OK?". `mcp_server.py` is
 an [MCP](https://modelcontextprotocol.io) server with tools to say something (with a face), set his face,
 greet, end a visit, pass him a question, play a song, change the volume, mute the mic, check his status, read
-the conversation and log, see the camera, run the echo test and send the ghost on a tour. He still chats with
+the conversation and log, see the camera, run the echo test, send the ghost on a tour, and set off a jump
+scare (lights out, then a red monster face lunges out with a roar; he giggles "Gotcha!" after). Only you
+can trigger the scare, optionally a few seconds later (`delay_s`); he never does it on his own. He still chats with
 visitors on his own; this is for stepping in. Whatever he says mid-visit, his next reply knows about.
 
 On the Pi, with the pumpkin running, add it to Claude Code:

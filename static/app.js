@@ -36,6 +36,8 @@ function connect() {
       Object.assign(face.calib, ev.calib);
     } else if (ev.t === "guide") {
       face.showGuide = ev.on;
+    } else if (ev.t === "scare") {
+      face.scare(ev.dark_ms, ev.ms);
     } else if (ev.t === "surprise") {
       face.surprise();
     } else if (ev.t === "laugh") {

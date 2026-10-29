@@ -58,6 +58,29 @@ def lan_ip():
         return "this-pi's-address"
 
 
+GOTCHAS = ["Hee hee hee! Gotcha! Don't worry, I'm just a big softie. Happy Halloween!",
+           "Gotcha! Ha! Sorry, I couldn't resist. Grab some candy, brave one!",
+           "Boo! Hee hee, did I get you? I'm a friendly pumpkin, I promise. Happy Halloween!"]
+
+
+def _roar(rate=16000, seconds=1.4):
+    """A monster roar: a growling sawtooth sliding down, a breathy noise rush and a little grit; loud but capped."""
+    rng = np.random.default_rng()
+    t = np.arange(int(rate * seconds)) / rate
+    f0 = 165 * np.exp(-t * 0.9) * (1 + 0.06 * np.sin(2 * np.pi * 23 * t))   # growl wobble
+    phase = 2 * np.cumsum(f0) / rate
+    saw = (phase % 2) - 1
+    sub = np.sin(np.pi * phase / 2)
+    noise = rng.standard_normal(len(t))
+    kernel = np.hanning(9)
+    noise = np.convolve(noise, kernel / kernel.sum(), "same")
+    voice = np.tanh(2.8 * (0.7 * saw + 0.5 * sub + 0.45 * noise * (0.6 + 0.4 * np.abs(saw))))
+    env = np.minimum(1, t / 0.03) * np.exp(-np.maximum(0, t - 0.25) * 2.2)
+    out = voice * env
+    out = out / (np.abs(out).max() + 1e-9) * 0.8          # loud, but 80% of full scale at the normal volume
+    return (out * 32767).astype(np.int16), rate
+
+
 class Pumpkin:
     def __init__(self, cfg):
         self.cfg = cfg
@@ -69,8 +92,10 @@ class Pumpkin:
         self.abort_visit = False
         self.force_greet = False
         self.typed = queue.Queue()
+        self._scaring = False
         self.history = collections.deque(maxlen=400)   # recent log lines, for the remote control (mcp_server.py)
         self.visit_session = ""
+        self._scaring = False
         saved = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
         self.gaze_flip = saved.get("gaze_flip", cfg["face"]["gaze_flip"])
         self.calib = saved.get("calib")
@@ -747,7 +772,7 @@ class Pumpkin:
         elif name == "mute":
             self.mic.user_muted = not self.mic.user_muted
             self.log(f"mic {'muted' if self.mic.user_muted else 'on'}")
-        elif name in ("say", "set_mood", "play_song", "songs", "recent"):
+        elif name in ("say", "set_mood", "play_song", "songs", "recent", "jump_scare"):
             return self.remote_command(name, data)
         elif name == "ask":
             text = str(data.get("text", ""))[:300].strip()
@@ -802,6 +827,17 @@ class Pumpkin:
                 return {"error": "unknown song; list them with songs"}
             threading.Thread(target=self.play_song, args=(song,), daemon=True, name="remote-song").start()
             return {"ok": True, "title": tunes.catalog()[song]["title"]}
+        if name == "jump_scare":
+            if self._scaring:
+                return {"error": "a jump scare is already on its way"}
+            try:
+                delay = max(0.0, min(10.0, float(data.get("delay_s", 0) or 0)))
+            except (TypeError, ValueError):
+                return {"error": "delay_s must be a number of seconds (0-10)"}
+            self._scaring = True
+            threading.Thread(target=self.jump_scare, args=(delay, data.get("gotcha", True) is not False),
+                             daemon=True, name="jump-scare").start()
+            return {"ok": True, "in_s": delay}
         if name == "recent":
             try:
                 n = max(1, min(400, int(data.get("lines", 60))))
@@ -811,6 +847,40 @@ class Pumpkin:
             lines = [h for h in self.history if not kinds or h["kind"] in kinds]
             return {"lines": lines[-n:], "state": self.state}
         return {"error": "unknown command"}
+
+    DARK_S, SCARE_S = 0.8, 1.6   # jump scare: lights out, then the monster face this long
+
+    def jump_scare(self, delay=0.0, gotcha=True):
+        """Remote control only (never the brain): the face goes dark, then a huge red monster face lunges out with a
+        roar and a flash of the porch lights; then he giggles so little ones aren't left scared."""
+        try:
+            time.sleep(delay)
+            self.log("🎮 remote: jump scare", "info")
+            was_awake, self.awake = self.awake, True
+            self.reveal(True)
+            roar, rate = _roar()
+            with Speaker._output_lock:     # wait for anything he's saying, then nothing else talks over the roar
+                self.hub.publish({"t": "scare", "dark_ms": int(self.DARK_S * 1000), "ms": int(self.SCARE_S * 1000)})
+                # the speaker takes about lead_in + latency to start sounding; land the roar on the face
+                time.sleep(max(0.0, self.DARK_S - self.speaker.lead_in - 0.15))
+                threading.Thread(target=lambda: (time.sleep(0.15), self.props.arrival()), daemon=True).start()
+                self.props.expression("surprised")
+                self.speaking = True
+                self.speaker.play_clip(roar, rate, on_level=self._set_mouth)
+                self.speaking = False
+                self.mouth = 0.0
+            time.sleep(0.3)
+            if gotcha:
+                self.mood("silly")
+                self.say(random.choice(GOTCHAS))
+            if self.visit_session:
+                brain.note_said(self.visit_session, "(a jump scare: lights out, then a monster face and a ROAR) "
+                                + ("then: gotcha!" if gotcha else ""))
+            if not was_awake and not self.visit_session:
+                self.awake = False
+                self.reveal(False)
+        finally:
+            self._scaring = False
 
     def _tour(self, name, route):
         if not self.show.summon(name, route[0]):

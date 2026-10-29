@@ -37,6 +37,9 @@ export const EXPRESSIONS = {
   crosseyed: { brow: 0.55, cross: 1, smile: 0.5, smirk: 0.4, tilt: 0.06 },
   wink: { brow: 0.3, browAsym: -0.6, wink: 1, smile: 0.85, smirk: 0.6, cheek: 0.3 },
   dizzy: { brow: 0.2, browTilt: 0.4, spin: 1, smile: 0.1, round: 0.4, wobble: 1 },
+  // The jump scare's monster face: huge, glaring, mouth gaping (see scare())
+  monster: { brow: -1, browTilt: -1.1, eye: 1.4, pupil: 0.3, lidTilt: 0.75, lid: 0.12, smile: 0.1, round: 0.35,
+             shake: 1.4, lean: 1.5 },
   scared: { brow: 0.9, browTilt: 0.9, eye: 1.15, pupil: 0.55, smile: -0.4, round: 0.5, shake: 1, lean: 0.96 },
 };
 // Silly faces win over the listening/thinking looks and per-sentence accents while they last.
@@ -90,6 +93,12 @@ export class PumpkinFace {
   // Called on each word boundary from speech synthesis.
   kick() { this.mouthKick = 1; }
   surprise(ms = 900) { this.surpriseUntil = performance.now() + ms; }
+  // Jump scare: the face goes dark for darkMs, then a huge glaring red monster face lunges out for ms.
+  scare(darkMs = 700, ms = 1600) {
+    const now = performance.now();
+    this.scareDark = [now, now + darkMs];
+    this.scareUntil = now + darkMs + ms;
+  }
   laugh(ms = 1500) { this.laughUntil = performance.now() + ms; }
   setVisible(on) { this.visible = on; }
   setMood(name) {
@@ -106,6 +115,7 @@ export class PumpkinFace {
 
   // Which expression to show right now.
   target(now) {
+    if (now < (this.scareUntil || 0) && now >= this.scareDark[1]) return "monster";
     if (!this.awake) return "sleepy";
     if (now < this.surpriseUntil) return "surprised";
     if (now < this.laughUntil) return "laughing";
@@ -144,6 +154,11 @@ export class PumpkinFace {
     }
     // Expression: ease every "muscle" toward the target expression.
     const goal = { ...BASE, ...EXPRESSIONS[this.target(now)] };
+    const scaring = now < (this.scareUntil || 0);
+    const bam = scaring && now >= this.scareDark[1];
+    if (bam && !this.scareHit) { this.scareHit = true; Object.assign(this.ex, goal); }   // no easing: it jumps
+    if (!scaring) this.scareHit = false;
+    this.red = lerp(this.red || 0, bam ? 1 : 0, 1 - Math.exp(-dt * (bam ? 40 : 3)));
     const e = 1 - Math.exp(-dt * 7);
     for (const k in goal) this.ex[k] = lerp(this.ex[k], goal[k], e);
     // Thinking eyes drift up and aside; others glance only slightly away from the person.
@@ -169,7 +184,10 @@ export class PumpkinFace {
     if (laughing) lidTarget = 0;
     else if (now < this.blinkUntil) lidTarget = 1;
     this.squint = lerp(this.squint, laughing ? 1 : 0, 1 - Math.exp(-dt * 12));
-    this.vis = lerp(this.vis, this.visible ? 1 : 0, 1 - Math.exp(-dt * (this.visible ? 3 : 1.5)));
+    const calm = this.scareDark && now >= this.scareDark[0] && now < this.scareDark[1];
+    if (calm) this.vis = lerp(this.vis, 0, 1 - Math.exp(-dt * 12));          // lights out...
+    else if (scaring) this.vis = 1;                                           // ...BOO
+    else this.vis = lerp(this.vis, this.visible ? 1 : 0, 1 - Math.exp(-dt * (this.visible ? 3 : 1.5)));
     this.lid = lerp(this.lid, lidTarget, 1 - Math.exp(-dt * (now < this.blinkUntil ? 40 : 8)));
 
     // Mouth: follows the audio loudness sent by the brain; otherwise syllable-rate flapping while speaking.
@@ -181,6 +199,7 @@ export class PumpkinFace {
       mTarget = 0.15 + 0.65 * syll + 0.4 * this.mouthKick;
     }
     if (now < this.laughUntil) mTarget = Math.max(mTarget, 0.25);   // keep a big open grin while laughing
+    if (bam) mTarget = Math.max(mTarget, 0.9);                       // roaring
     this.mouthKick = Math.max(0, this.mouthKick - dt * 5);
     this.mouth = lerp(this.mouth, clamp(mTarget, 0, 1), 1 - Math.exp(-dt * 30));
     // Stressed, loud words make the brows pop up, like people do when they talk.
@@ -233,10 +252,10 @@ export class PumpkinFace {
 
   glow(x, y, r, brightness) {
     const grad = this.ctx.createRadialGradient(x, y, r * 0.05, x, y, r);
-    const a = clamp(brightness, 0, 1);
-    grad.addColorStop(0, `rgba(255, 250, 200, ${a})`);
-    grad.addColorStop(0.35, `rgba(255, 196, 40, ${a})`);
-    grad.addColorStop(1, `rgba(255, 96, 0, ${a})`);
+    const a = clamp(brightness, 0, 1), red = this.red || 0;   // red: the jump scare's glare
+    grad.addColorStop(0, `rgba(255, ${Math.round(250 - 120 * red)}, ${Math.round(200 - 170 * red)}, ${a})`);
+    grad.addColorStop(0.35, `rgba(255, ${Math.round(196 - 156 * red)}, ${Math.round(40 - 30 * red)}, ${a})`);
+    grad.addColorStop(1, `rgba(${Math.round(255 - 55 * red)}, ${Math.round(96 - 86 * red)}, 0, ${a})`);
     return grad;
   }
 

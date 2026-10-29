@@ -149,6 +149,15 @@ def ghost_tour() -> dict:
 
 
 @server.tool()
+def jump_scare(delay_s: float = 0, gotcha: bool = True) -> dict:
+    """BOO! His face goes dark for a moment, then a huge glowing red monster face lunges out with a loud roar
+    (and a flash of the porch lights and fog, if wired up). Then he giggles "Gotcha!" so little kids aren't
+    left scared (gotcha=False skips that). delay_s (0-10) arms it to go off a few seconds later, e.g. once a
+    kid leans in. Best for older kids and grown-ups; check with look first if you're not sure who's there."""
+    return _call("/api/jump_scare", {"delay_s": delay_s, "gotcha": gotcha})
+
+
+@server.tool()
 def echo_test() -> dict:
     """Check the speaker and the mic array's echo cancellation (about 25 s; plays a test sentence out loud).
     Read the result with recent_log afterwards: the lines starting with 🔊."""
