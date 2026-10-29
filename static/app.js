@@ -20,6 +20,41 @@ function log(text, cls = "info") {
   logEl.scrollTop = logEl.scrollHeight;
 }
 
+// ---- Idle video (e.g. AtmosFX singing pumpkins) while he waits; the live face takes over for a visit ----
+const idleEl = $("idle");
+let idleOn = false, idleTimer = null, faceHidden = false;   // faceHidden: skip drawing (the Pi's CPU goes to the video)
+function idleVideo(ev) {
+  const fade = `${ev.fade ?? 1}s`;
+  idleEl.style.transition = $("face").style.transition = `opacity ${fade}`;
+  clearTimeout(idleTimer);
+  if (!ev.on) {
+    idleOn = false;
+    faceHidden = false;
+    idleEl.style.opacity = 0;
+    $("face").style.opacity = 1;
+    idleTimer = setTimeout(() => { if (!idleOn) idleEl.pause(); }, (ev.fade ?? 1) * 1000 + 100);
+    return;
+  }
+  idleOn = true;
+  const src = `idle/video?clip=${ev.clip ?? 0}`;
+  if (idleEl.getAttribute("src") !== src) { idleEl.setAttribute("src", src); idleEl.load(); }
+  const start = () => {
+    if (ev.start) {            // the brain plays the soundtrack: line the picture up with it
+      idleEl.loop = false;
+      const at = Date.now() / 1000 - ev.start;
+      if (at < 0) { idleTimer = setTimeout(start, -at * 1000); return; }
+      idleEl.currentTime = at;
+    } else {
+      idleEl.loop = true;      // no soundtrack: just loop the picture
+    }
+    idleEl.play().catch(() => {});
+    idleEl.style.opacity = 1;
+    $("face").style.opacity = 0;
+    setTimeout(() => { if (idleOn) faceHidden = true; }, (ev.fade ?? 1) * 1000 + 100);
+  };
+  if (idleEl.readyState >= 1) start(); else idleEl.addEventListener("loadedmetadata", start, { once: true });
+}
+
 // ---- Live state from the brain ----
 function connect() {
   const es = new EventSource("events");
@@ -36,6 +71,10 @@ function connect() {
       Object.assign(face.calib, ev.calib);
     } else if (ev.t === "guide") {
       face.showGuide = ev.on;
+    } else if (ev.t === "idle" && !REMOTE) {
+      idleVideo(ev);
+    } else if (ev.t === "scare") {
+      face.scare(ev.dark_ms, ev.ms);
     } else if (ev.t === "surprise") {
       face.surprise();
     } else if (ev.t === "laugh") {
@@ -90,8 +129,10 @@ function frame(now) {
   const dt = Math.min(0.1, (now - lastFrame) / 1000);
   lastFrame = now;
   if (now - lastFace > 2000) { face.awake = false; face.speaking = false; face.mouthLevel = null; }
-  face.update(now, dt);
-  face.draw(now);
+  if (!faceHidden) {
+    face.update(now, dt);
+    face.draw(now);
+  }
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
