@@ -528,8 +528,9 @@ class _StreamResampler:
         self.raw = np.concatenate([self.raw, chunk.astype(np.float32)] + ([np.zeros(self.HALF, np.float32)] if last else []))
         done = len(self.filtered)
         # filtered[i] is centred on raw[i + HALF]
-        new = np.convolve(self.raw[done:], self.taps, mode="valid")
-        self.filtered = np.concatenate([self.filtered, new])
+        if len(self.raw) - done >= len(self.taps):     # (shorter input would make "valid" swap its arguments)
+            new = np.convolve(self.raw[done:], self.taps, mode="valid")
+            self.filtered = np.concatenate([self.filtered, new])
         step = self.rate / self.new_rate
         n_total = int((len(self.filtered) - 1) / step) + 1 if len(self.filtered) else 0
         if n_total <= self.out_n:
@@ -843,8 +844,10 @@ class Speaker:
                     yield out, min(1.0, r / ref) ** 0.6, r
             if resampler is not None:
                 buf = np.concatenate([buf, resampler.feed(np.zeros(0, np.int16), last=True)])
-            if started and len(buf):
-                yield np.pad(buf, (0, block - len(buf))), 0.0, 0.0
+            if started and len(buf):          # what's left (the resampler's tail can be more than a block)
+                buf = np.pad(buf, (0, -len(buf) % block))
+                for i in range(0, len(buf), block):
+                    yield buf[i:i + block], 0.0, 0.0
             for _ in range(int(pause / self.BLOCK_S)):
                 yield np.zeros(block, np.int16), 0.0, 0.0
 
