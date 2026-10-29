@@ -69,11 +69,12 @@ DEFAULTS = {
         "barge_vad": "auto",          # also require the mic array's own speech detector (auto: with echo cancellation)
     },
     "stt": {
-        "engine": "whisper",          # whisper | none (type questions in the debug panel)
-        "model": "base.en",           # tiny.en is faster, small.en more accurate
+        "engine": "whisper",          # whisper (on the Pi) | openai (cloud, whisper as backup) | none (type in the debug panel)
+        "model": "base.en",           # whisper: tiny.en is faster, small.en more accurate
         "compute_type": "int8",
-        "pause_camera": True,         # stop person detection while it transcribes (the camera competes for the CPU)
         "threads": 4,
+        "openai_model": "gpt-4o-transcribe",        # or gpt-4o-mini-transcribe (cheaper; on the Pi both took ~0.7-1 s)
+        "openai_timeout_s": 4.0,      # give up on the cloud and use whisper after this long
         "pause_camera": True,         # stop person detection while it transcribes (the camera competes for the CPU)
     },
     "tts": {

@@ -20,7 +20,7 @@ import numpy as np
 import brain
 import tunes
 import config
-from audio import Listener, Microphone, Speaker, WhisperSTT, make_tts
+from audio import Listener, Microphone, OpenAISTT, Speaker, WhisperSTT, make_tts
 from align import Aligner
 from doa import ReSpeakerDOA
 from home import Home
@@ -108,12 +108,19 @@ class Pumpkin:
         self.vision = Vision(cfg["camera"], cfg["detector"], self.log)
         self.doa = ReSpeakerDOA(cfg["doa"], self.log) if cfg["doa"]["enabled"] else None
         self.mic = Microphone(cfg["mic"], self.log)
-        stt = None
-        if cfg["stt"]["engine"] == "whisper":
+        stt, engine = None, cfg["stt"]["engine"]
+        if engine in ("whisper", "openai"):
             try:
                 stt = WhisperSTT(cfg["stt"], self.log)
             except Exception as exc:
-                self.log(f"speech recognition off ({type(exc).__name__}: {exc}); type questions in the debug panel")
+                self.log(f"whisper off ({type(exc).__name__}: {exc})")
+        if engine == "openai":
+            try:
+                stt = OpenAISTT(cfg["stt"], self.log, backup=stt)
+            except Exception as exc:
+                self.log(f"OpenAI speech recognition off ({exc}); using whisper")
+        if stt is None:
+            self.log("speech recognition off; type questions in the debug panel")
         self.listener = Listener(self.mic, cfg["mic"], stt)
         if cfg["stt"].get("pause_camera", True):   # give speech recognition the whole CPU
             self.listener.on_busy = self.vision.pause
@@ -372,6 +379,8 @@ class Pumpkin:
 
         worker = threading.Thread(target=ask_claude, daemon=True)
         worker.start()
+        if hasattr(self.listener.stt, "warm_up"):   # connect to the cloud before they first speak
+            threading.Thread(target=self.listener.stt.warm_up, daemon=True).start()
         self.say(random.choice(FILLERS))      # covers the time Claude takes to look
         worker.join()
         if result.get("costumes"):

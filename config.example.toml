@@ -27,6 +27,8 @@ device = "ReSpeaker"           # part of the mic's name; falls back to the defau
 
 [stt]
 model = "base.en"              # tiny.en = faster, small.en = more accurate
+# engine = "openai"            # cloud speech recognition: faster, better with kids, but their voices go to
+                               # OpenAI (needs OPENAI_API_KEY). Whisper on the Pi stays as the backup.
 
 [tts]
 engine = "piper"               # piper | openai | elevenlabs | espeak | none

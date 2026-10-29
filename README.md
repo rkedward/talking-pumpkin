@@ -267,6 +267,7 @@ The most useful ones:
 | `[detector] min_height` | 0.25 | Smallest person (fraction of frame height) that counts as a visitor. |
 | `[visit] max_turns`, `max_visit_s` | 5, 90 | Wrap up so the line keeps moving. |
 | `[stt] model` | `base.en` | `tiny.en` is faster, `small.en` more accurate (slower on the Pi). |
+| `[stt] engine` | `whisper` | `openai` sends speech to OpenAI (needs `OPENAI_API_KEY`): about 0.5 s faster and much better with kids' voices, at well under a cent a visit. Whisper on the Pi takes over if the internet drops. Visitors' voices leave the porch, so a small sign is a nice touch. |
 | `[tts] engine` | `piper` | `openai` or `elevenlabs` for natural cloud voices, `espeak` for a robotic fallback. |
 | `[tts] piper_voice` | `en_US-ryan-medium` | Any voice from the Piper voice list; rerun `install_pi.sh` to download it. Try `en_GB-alan-medium` or `en_US-joe-medium`. |
 | `[tts] pitch_semitones` | -2 | Deeper (negative) or squeakier (positive) voice. |

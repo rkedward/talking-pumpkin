@@ -233,13 +233,14 @@ class Listener:
                 if silent * frame_s >= float(self.cfg["silence_end_s"]) or too_long:
                     audio = np.concatenate(chunks).astype(np.float32) / 32768.0
                     stt_from = time.time()
-                    if self.on_busy:
-                        self.on_busy(True)
+                    pause = self.on_busy if getattr(self.stt, "local", True) else None
+                    if pause:
+                        pause(True)
                     try:
                         text = self.stt.transcribe(audio, self.mic.rate)
                     finally:
-                        if self.on_busy:
-                            self.on_busy(False)
+                        if pause:
+                            pause(False)
                     # for the response-time log: when they stopped talking, and how long recognition took
                     self.timing = {"stopped": stt_from - silent * frame_s, "wait": silent * frame_s,
                                    "stt": time.time() - stt_from}
@@ -257,6 +258,8 @@ _HALLUCINATIONS = {"", "you", "thank you.", "thanks for watching!", "thank you f
 
 class WhisperSTT:
     """Local speech recognition with faster-whisper; no audio leaves the device."""
+
+    local = True
 
     def __init__(self, cfg, log):
         from faster_whisper import WhisperModel
@@ -280,6 +283,80 @@ class WhisperSTT:
             text = ""
         self.log(f"(heard in {time.time() - started:.1f}s: {text!r})")
         return text
+
+
+class OpenAISTT:
+    """Cloud speech recognition (OpenAI). Faster and better with kids' voices than whisper on the Pi, but each
+    recording goes to OpenAI. Falls back to local whisper (if it loaded) when the cloud call fails."""
+
+    local = False
+
+    def __init__(self, cfg, log, backup=None):
+        import os
+        self.key = os.environ.get("OPENAI_API_KEY", "")
+        if not self.key:
+            raise RuntimeError("put OPENAI_API_KEY=... in .env")
+        self.log, self.backup = log, backup
+        self.model = cfg.get("openai_model", "gpt-4o-transcribe")
+        self.timeout = float(cfg.get("openai_timeout_s", 4.0))
+        self.warned = 0
+        try:
+            import httpx   # comes with the anthropic package
+            self.http = httpx.Client(http2=False)
+        except ImportError:
+            self.http = None
+        log(f"speech recognition: OpenAI {self.model}" + (" (whisper as backup)" if backup else ""))
+
+    def transcribe(self, audio, rate):
+        started = time.time()
+        try:
+            text = self._cloud(audio, rate)
+        except Exception as exc:
+            if not self.backup:
+                raise
+            if time.time() - self.warned > 60:
+                detail = exc.read().decode(errors="replace")[:200] if hasattr(exc, "read") else ""
+                self.log(f"speech recognition: OpenAI failed ({exc} {detail}); using whisper")
+                self.warned = time.time()
+            return self.backup.transcribe(audio, rate)
+        if text.lower() in _HALLUCINATIONS or re.fullmatch(r"[\W_]*", text):
+            text = ""
+        self.log(f"(heard in {time.time() - started:.1f}s: {text!r})")
+        return text
+
+    def _cloud(self, audio, rate):
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(int(rate))
+            w.writeframes((np.clip(audio, -1, 1) * 32767).astype(np.int16).tobytes())
+        fields = {"model": self.model, "language": "en", "response_format": "json",
+                  "prompt": "Kids trick-or-treating on Halloween talking to a jack-o'-lantern."}
+        headers = {"Authorization": f"Bearer {self.key}"}
+        if self.http:   # keeps the connection open between turns (saves ~0.3 s a call)
+            r = self.http.post("https://api.openai.com/v1/audio/transcriptions", headers=headers, data=fields,
+                               files={"file": ("speech.wav", buf.getvalue(), "audio/wav")}, timeout=self.timeout)
+            r.raise_for_status()
+            return r.json().get("text", "").strip()
+        boundary = f"----pumpkin{random.getrandbits(64):x}"
+        body = b"".join(f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode()
+                        for k, v in fields.items())
+        body += (f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="speech.wav"\r\n'
+                 f"Content-Type: audio/wav\r\n\r\n").encode() + buf.getvalue() + f"\r\n--{boundary}--\r\n".encode()
+        req = urllib.request.Request("https://api.openai.com/v1/audio/transcriptions", data=body,
+                                     headers={**headers, "Content-Type": f"multipart/form-data; boundary={boundary}"})
+        with urllib.request.urlopen(req, timeout=self.timeout) as r:
+            return json.loads(r.read()).get("text", "").strip()
+
+    def warm_up(self):
+        """Open the connection ahead of the first question (someone just walked up)."""
+        if self.http:
+            try:
+                self.http.get("https://api.openai.com/v1/models/" + self.model,
+                              headers={"Authorization": f"Bearer {self.key}"}, timeout=self.timeout)
+            except Exception:
+                pass
 
 
 # --------------------------------------------------------------------------------------------- TTS
