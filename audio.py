@@ -497,6 +497,9 @@ class Speaker:
 
     BLOCK_S = 1 / 60
     volume = 1.0   # shared by the pumpkin and his assistants; set from the debug panel (0 .. 1.5)
+    # One sound at a time: a speaker opened directly (like the mic array's jack, hw:2,0) can't play two
+    # streams at once, so overlapping speech (a face demo during an echo test, say) waits its turn.
+    _output_lock = threading.RLock()
 
     def __init__(self, tts, cfg, mic, log):
         self.tts, self.mic, self.log = tts, mic, log
@@ -533,6 +536,10 @@ class Speaker:
             log(f"voice: {len(self.laughs)} recorded laughs")
 
     def speak(self, text, on_level, on_sentence=None, should_stop=lambda: False):
+        with Speaker._output_lock:
+            self._speak(text, on_level, on_sentence, should_stop)
+
+    def _speak(self, text, on_level, on_sentence, should_stop):
         sentences = _sentences(text)
         if not self.laughs and getattr(self.tts, "cloud", False):
             # Spoken on its own, "Ho ho ho!" gets read out as words; said right after the joke, the voice laughs.
@@ -637,6 +644,10 @@ class Speaker:
 
     def play_clip(self, audio, rate, on_level=lambda level: None, should_stop=lambda: False):
         """Play ready-made audio (a song for the game) through the same speaker."""
+        with Speaker._output_lock:
+            self._play_clip(audio, rate, on_level, should_stop)
+
+    def _play_clip(self, audio, rate, on_level, should_stop):
         if not sd or audio is None or not len(audio):
             return
         out_rate, channels = self._format(rate)
