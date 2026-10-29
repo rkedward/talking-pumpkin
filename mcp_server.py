@@ -77,7 +77,8 @@ def say(text: str, mood: str = "") -> dict:
 @server.tool()
 def set_mood(mood: str) -> dict:
     """Change his face: happy, excited, surprised, curious, thinking, sly, sad, spooky, proud, or a silly one:
-    silly, tongue (sticks his tongue out), crosseyed, wink, dizzy (spinning eyes), scared."""
+    silly (cross-eyed with puckered lips), tongue (sticks his tongue out), crosseyed, wink, dizzy (spinning
+    eyes), scared."""
     return _call("/api/set_mood", {"mood": mood})
 
 

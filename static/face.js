@@ -12,10 +12,10 @@ const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 //  round: "O" mouth                    smirk: lopsided mouth  pupil: pupil size
 //  look: [x, y] gaze offset            tilt: head tilt (radians)  lean: head scale (leaning in)
 //  Silly ones: tongue: sticks out and waggles   cross: cross-eyed   wink: one eye shut
-//  spin: pupils whirl (dizzy)   wobble: head wobbles side to side   shake: shivers
+//  spin: pupils whirl (dizzy)   wobble: head wobbles side to side   shake: shivers   pucker: small kissy lips
 const BASE = { brow: 0, browTilt: 0, browAsym: 0, eye: 1, cheek: 0, lidTilt: 0, lid: 0, smile: 0.35, round: 0,
                smirk: 0, pupil: 1, lookX: 0, lookY: 0, tilt: 0, lean: 1,
-               tongue: 0, cross: 0, wink: 0, spin: 0, wobble: 0, shake: 0 };
+               tongue: 0, cross: 0, wink: 0, spin: 0, wobble: 0, shake: 0, pucker: 0 };
 export const EXPRESSIONS = {
   neutral: {},
   happy: { brow: 0.3, cheek: 0.35, smile: 0.85 },
@@ -32,7 +32,7 @@ export const EXPRESSIONS = {
   listening: { brow: 0.45, eye: 1.05, smile: 0.45, tilt: 0.1, lean: 1.03 },
   sleepy: { brow: -0.4, smile: 0.2 },
   // Silly faces for playing around with the kids
-  silly: { brow: 0.7, browAsym: 0.8, cheek: 0.2, smile: 0.9, tongue: 0.85, cross: 0.75, wobble: 1 },
+  silly: { brow: 0.7, browAsym: 0.6, smile: 0.35, cross: 1, pucker: 1, wobble: 0.5 },   // cross-eyed, lips puckered
   tongue: { brow: 0.45, smile: 0.55, tongue: 1, lid: 0.2, wobble: 0.35 },
   crosseyed: { brow: 0.55, cross: 1, smile: 0.5, smirk: 0.4, tilt: 0.06 },
   wink: { brow: 0.3, browAsym: -0.6, wink: 1, smile: 0.85, smirk: 0.6, cheek: 0.3 },
@@ -354,14 +354,19 @@ export class PumpkinFace {
 
   drawMouth(brightness) {
     const ctx = this.ctx, ex = this.ex;
-    const open = this.mouth;
-    const W = 290 * (1 - 0.5 * ex.round) * (1 - 0.15 * Math.abs(ex.smirk));
+    const pk = ex.pucker;
+    const open = this.mouth * (1 - 0.6 * pk);
+    const W = 290 * (1 - 0.5 * ex.round) * (1 - 0.15 * Math.abs(ex.smirk)) * (1 - 0.75 * pk);
     // Corners rise for a smile and drop for a frown; a smirk lifts one side.
     const lift = (ex.smile - 0.35) * 70;
     const yL = 110 - lift - ex.smirk * 35, yR = 110 - lift + ex.smirk * 25;
     const frown = Math.max(0, -ex.smile);     // a frown bends both lips upward into an arch
-    const upperC = 215 - open * 25 - ex.round * 60 - frown * 160;
-    const lowerC = Math.max(upperC + 20 + open * 150, 255 + open * 190 + ex.round * 90 - frown * 200);
+    let upperC = 215 - open * 25 - ex.round * 60 - frown * 160;
+    let lowerC = Math.max(upperC + 20 + open * 150, 255 + open * 190 + ex.round * 90 - frown * 200);
+    if (pk > 0.01) {                           // puckered: a small round "o" of lips
+      upperC = lerp(upperC, yL - 95, pk);
+      lowerC = lerp(lowerC, yL + 95 + open * 60, pk);
+    }
     const curveY = (x, c) => {                 // quadratic with control at x=0: x is linear in t
       const t = (x + W) / (2 * W);
       return (1 - t) ** 2 * yL + 2 * t * (1 - t) * c + t * t * yR;
@@ -380,8 +385,16 @@ export class PumpkinFace {
     ctx.shadowBlur = 0;
     ctx.clip();
 
-    // Teeth are uncarved pumpkin, so they're black blocks inside the glowing mouth.
-    ctx.fillStyle = "#000";
+    // Teeth are uncarved pumpkin, so they're black blocks inside the glowing mouth (none when puckered).
+    ctx.fillStyle = pk > 0.5 ? "rgba(0,0,0,0)" : "#000";
+    if (pk > 0.3) {                            // the line between puckered lips
+      ctx.save();
+      ctx.fillStyle = "#000";
+      ctx.beginPath();
+      ctx.ellipse(0, curveY(0, (upperC + lowerC) / 2), W * 0.75, 6 + 30 * open, 0, 0, TAU);
+      ctx.fill();
+      ctx.restore();
+    }
     const sx = W / 290;
     for (const [x0, x1] of [[-150 * sx, -95 * sx], [70 * sx, 125 * sx]]) {     // upper teeth hang down
       const y = Math.min(curveY(x0, upperC), curveY(x1, upperC));
