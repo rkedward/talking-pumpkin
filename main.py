@@ -638,7 +638,7 @@ class Pumpkin:
             self.force_greet = False
             self.visit(True, trigger, said)
             self.set_state("cooldown")
-            time.sleep(2.5)
+            time.sleep(float(v["cooldown_s"]))   # 0 = listen for the next group right away
 
     def _heard_voice(self):
         self.last_activity = time.time()

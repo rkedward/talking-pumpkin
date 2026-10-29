@@ -56,6 +56,7 @@ DEFAULTS = {
         "knock": True,                # a knock on the door starts a visit too
         "knock_ratio": 8.0,           # how far above the room's noise a knock must jump (higher = less sensitive)
         "knocks": 2,                  # knocks within 1.5 s that count ("knock knock")
+        "cooldown_s": 0,              # sound mode: pause after a visit before listening for the next one
         "quiet_end_s": 12,            # sound mode: this long with nobody talking = "are you still there?", then bye
     },
     "mic": {
