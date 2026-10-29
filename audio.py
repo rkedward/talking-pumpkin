@@ -448,8 +448,17 @@ def make_tts(cfg, log):
 # --------------------------------------------------------------------------------------------- speaker
 
 def _resample(audio, rate, new_rate):
-    n = int(len(audio) * new_rate / rate)
-    return np.interp(np.linspace(0, len(audio) - 1, n), np.arange(len(audio)), audio.astype(np.float32)).astype(np.int16)
+    x = audio.astype(np.float32)
+    if new_rate < rate and len(x) > 64:
+        # Going down (e.g. 24 kHz voice to the mic array's 16 kHz): low-pass first so the highs don't fold
+        # back as hiss.
+        cut = 0.45 * new_rate / rate
+        k = np.arange(-32, 33)
+        taps = 2 * cut * np.sinc(2 * cut * k) * np.hamming(len(k))
+        x = np.convolve(x, taps / taps.sum(), mode="same")
+    n = int(len(x) * new_rate / rate)
+    out = np.interp(np.linspace(0, len(x) - 1, n), np.arange(len(x)), x)
+    return np.clip(out, -32768, 32767).astype(np.int16)
 
 
 def _trim(audio, rate, threshold=300, keep_s=0.04):
@@ -604,7 +613,12 @@ class Speaker:
         directly (no PipeWire in between), and USB speakers often take only 48 kHz stereo."""
         if rate not in self._formats:
             found = (rate, 1)
-            for r in (rate, 48000, 44100):
+            try:
+                default = int(sd.query_devices(self.device, "output")["default_samplerate"])
+            except Exception:
+                default = 48000
+            # The XVF3800 mic array plays only 16 kHz stereo.
+            for r in dict.fromkeys((rate, default, 48000, 44100, 16000)):
                 ok = None
                 for ch in (1, 2):
                     try:
