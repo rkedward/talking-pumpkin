@@ -32,7 +32,8 @@ export const EXPRESSIONS = {
   listening: { brow: 0.45, eye: 1.05, smile: 0.45, tilt: 0.1, lean: 1.03 },
   sleepy: { brow: -0.4, smile: 0.2 },
   // Silly faces for playing around with the kids
-  silly: { brow: 0.7, browAsym: 0.6, smile: 0.35, cross: 1, pucker: 1, wobble: 0.5 },   // cross-eyed, lips puckered
+  silly: { brow: 0.5, browAsym: 0.9, cheek: 0.25, smile: 1, smirk: 0.8, round: 0.2, cross: 1, wobble: 0.8,
+           tilt: 0.08 },   // cross-eyed with a big crooked goofy grin, one brow way up
   tongue: { brow: 0.45, smile: 0.55, tongue: 1, lid: 0.2, wobble: 0.35 },
   crosseyed: { brow: 0.55, cross: 1, smile: 0.5, smirk: 0.4, tilt: 0.06 },
   wink: { brow: 0.3, browAsym: -0.6, wink: 1, smile: 0.85, smirk: 0.6, cheek: 0.3 },

@@ -453,10 +453,11 @@ class Pumpkin:
                     elif said:
                         note += f' You heard them say: "{said}". Answer that too.'
                     if not people:
-                        note += (" Nobody is in view of your eyes yet: greet them warmly, ask them to step right in"
-                                 " front of you so you can see their costumes, and set look to true.")
-                result.update(brain.greet(self.vision.snapshot_b64(), len(people) if self.sound else max(1, len(people)),
-                                          note))
+                        note += (" Nobody is in view of your eyes yet (no picture): greet them warmly, ask them to"
+                                 " step right in front of you so you can see their costumes, and set look to true."
+                                 " Don't describe darkness or blur; you just can't see them yet.")
+                image = self.vision.snapshot_b64() if people or not self.sound else ""
+                result.update(brain.greet(image, len(people) if self.sound else max(1, len(people)), note))
             except Exception as exc:
                 self.log(f"claude error: {type(exc).__name__}: {exc}")
                 result.update({"session": "", "costumes": [], "say": brain.FALLBACK_SAY})
@@ -502,6 +503,7 @@ class Pumpkin:
                 pending_look, looks = False, looks + 1
                 self.set_state("thinking")
                 seen, image = self.look_for_people()
+                image = image if seen else None   # a picture of nobody only gets him describing the dark
                 heard, timing = None, {}
                 self.log(f"👀 looked: {seen} in view", "info")
             else:
@@ -529,12 +531,14 @@ class Pumpkin:
             # The reply streams in: he starts saying its first sentence while Claude is still writing the rest.
             sentences, reply = queue.Queue(), {}
 
-            def think(heard=heard, cut_off=cut_off, on_stage=on_stage, image=image, seen=seen):
+            last = turns + 1 >= max_turns or time.time() - started > max_s - 10
+
+            def think(heard=heard, cut_off=cut_off, on_stage=on_stage, image=image, seen=seen, last=last):
                 try:
                     reply.update(brain.chat(session, heard,
                                             f"{on_stage['name']} (in {self.show.screen})" if on_stage else None,
                                             cut_off=cut_off, on_say=sentences.put, on_mood=self.mood,
-                                            image_b64=image, people=seen))
+                                            image_b64=image, people=seen, last=last))
                 except Exception as exc:
                     self.log(f"claude error: {type(exc).__name__}: {exc}")
                     reply.update({"say": "Ooh, my pumpkin brain went fuzzy. Happy Halloween!"})
@@ -560,7 +564,9 @@ class Pumpkin:
                 turns += 1
                 continue
             brain_thread.join(timeout=10)
-            pending_look = self.sound and reply.get("look")
+            pending_look = self.sound and reply.get("look") and not last
+            if last and not reply.get("play_song"):   # that reply was his goodbye
+                break
             if self.sound and heard and BYE_RE.search(heard):   # they said goodbye, and he said it back
                 break
             self.sideshow(reply)

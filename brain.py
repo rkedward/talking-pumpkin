@@ -23,6 +23,7 @@ GAME = True              # [claude] song_game: offer the "guess the song" game
 PROVIDER = "claude"      # claude | openai
 OPENAI_MODEL = "gpt-5-mini"
 OPENAI_REASONING = "minimal"
+MAX_SENTENCES = 2       # [claude] max_sentences: he never says more than this many sentences in one reply
 LOOK = False            # sound-triggered visits: the camera only looks when asked ("look" in the reply)
 CREATURES = []          # [{"name": ..., "description": ..., "windows": [...]}] that can appear in a window
 WINDOWS = {}            # window name -> where it is, as the pumpkin tells kids ("the front door window behind you")
@@ -37,6 +38,8 @@ def configure(cfg, creatures=(), windows=None, online=None):
     LAUGH = bool(cfg.get("laugh", True))
     global LAUGH_TEXT, GAME
     GAME = bool(cfg.get("song_game", True))
+    global MAX_SENTENCES
+    MAX_SENTENCES = int(cfg.get("max_sentences", MAX_SENTENCES))
     tunes.SOURCE = cfg.get("song_source", "auto")
     LAUGH_TEXT = cfg.get("laugh_text") or LAUGH_TEXT
     OPENAI_MODEL, OPENAI_REASONING = cfg.get("openai_model", OPENAI_MODEL), cfg.get("openai_reasoning", "")
@@ -162,14 +165,16 @@ spoken aloud by a text-to-speech voice, so:
   excited (a great costume), curious (asking something), thinking, sly (before a punchline), sad (sad-but-silly
   when they leave), spooky, proud, surprised.
 - You also have silly faces for playing with kids: "tongue" (you stick your tongue out and waggle it),
-  "crosseyed", "wink", "dizzy" (your eyes spin and your head wobbles), "silly" (cross-eyed with puckered
-  fishy lips) and "scared" (you shiver with big worried eyes; great when a kid says "boo" or roars at
+  "crosseyed", "wink", "dizzy" (your eyes spin and your head wobbles), "silly" (cross-eyed with a big
+  crooked goofy grin and a head wobble) and "scared" (you shiver with big worried eyes; great when a kid says "boo" or roars at
   you). Use them to play: a silly-face contest ("Can you make a sillier face than this?"), copying a face a kid
   makes, pretending a monster costume scares you, getting dizzy from a joke. A silly face flashes for a
   second as you start the reply, then you're back to your normal face, so say something short that lands
   right after it ("How's that?", "Your turn!"). Never narrate the
   face or make up sound effects for it ("bleh, wobble, wiggle"). Never claim a face you aren't making: if
-  you say you're crossing your eyes, set "crosseyed". Don't use one every reply; save them for fun moments.
+  you say you're crossing your eyes, set "crosseyed". Use a silly face only when they ask for one, to
+  answer a silly face or joke, or in a face contest, and at most twice a visit; never just because a reply is
+  funny.
 - Jump scares only happen when the porch owner sets one off; never promise one or say you'll do one (you may
   tease "only the bravest trick-or-treaters get my scariest face..."). If one just happened, you're giggly
   and kind about it.
@@ -441,7 +446,7 @@ def greet(image_b64, people, note=""):
         content.append({"type": "text", "text": prompt})
         data = _parse(call_claude([{"role": "user", "content": content}], schema=output_schema(True)))
     costumes = data.get("costumes") or []
-    say = _no_laughs(data.get("say") or FALLBACK_SAY)
+    say = _cap(_no_laughs(data.get("say") or FALLBACK_SAY))
     audience = "teens" if data.get("audience") == "teens" else "kids"
     mood = data.get("mood") if data.get("mood") in MOODS else "happy"
     result = {"costumes": costumes, "audience": audience, "say": say, "mood": mood, "look": bool(data.get("look")),
@@ -489,7 +494,7 @@ class _SayStreamer:
     """Hands each finished sentence of "say" to a callback while the reply is still arriving."""
 
     def __init__(self, on_sentence, on_mood=None):
-        self.on_sentence, self.on_mood, self.sent = on_sentence, on_mood, 0
+        self.on_sentence, self.on_mood, self.sent, self.count = on_sentence, on_mood, 0, 0
 
     def __call__(self, so_far):
         if self.on_mood:
@@ -508,8 +513,17 @@ class _SayStreamer:
                 piece = say[self.sent:end].strip()
                 self.sent = end
                 piece = _no_laughs(piece) if piece and not (not LAUGH and LAUGH_RE.match(piece)) else ""
-                if piece:
+                if piece and self.count < MAX_SENTENCES:   # (the rest is cut, so replies stay short)
+                    self.count += 1
                     self.on_sentence(piece)
+
+
+def _cap(text):
+    """At most MAX_SENTENCES sentences (the same cut the streamer makes)."""
+    if not text:
+        return text
+    ends = [m.end() for m in re.finditer(r"[.!?]+[\"')\]]*(?=\s)", text)]
+    return text[:ends[MAX_SENTENCES - 1]].strip() if len(ends) >= MAX_SENTENCES else text
 
 
 def note_said(sid, text):
@@ -520,7 +534,7 @@ def note_said(sid, text):
             session.setdefault("puppet", []).append(text)
 
 
-def chat(sid, text, on_stage=None, cut_off=None, on_say=None, on_mood=None, image_b64=None, people=0):
+def chat(sid, text, on_stage=None, cut_off=None, on_say=None, on_mood=None, image_b64=None, people=0, last=False):
     """on_stage: name of the creature currently visible in the window, if any. cut_off: they talked over
     your last reply; this is the part of it you got to say."""
     with _lock:
@@ -543,10 +557,13 @@ def chat(sid, text, on_stage=None, cut_off=None, on_say=None, on_mood=None, imag
     if cut_off is not None:
         said = f'you had only said "{cut_off}"' if cut_off else "before you got a word out"
         note += f" (They talked over your last reply, {said}. Answer what they said; don't repeat yourself.)"
+    if last:
+        note += (" (This is your last reply of the visit: answer, then say a warm goodbye and remind them to take"
+                 " candy. Don't ask a question or promise anything more.)")
     if text is None:   # no words: the fresh look he asked for
         said = (f"(You take a fresh look: {people} {'person' if people == 1 else 'people'} in view. React to what "
-                "you see now: compliment the costumes you can make out, or if you still can't see anyone, say so "
-                "playfully.)" + note)
+                "you see now: compliment the costumes you can make out. If nobody is in view, just say you still "
+                "can't see them; never describe darkness, blur or shapes.)" + note)
     else:
         said = f'The trick-or-treater says: "{text}"{note}'
     history = session["history"] + [{"role": "user", "content": said}]
@@ -568,7 +585,7 @@ def chat(sid, text, on_stage=None, cut_off=None, on_say=None, on_mood=None, imag
     if song:
         session["song"] = song
     result = {"mood": data.get("mood") if data.get("mood") in MOODS else "happy", "play_song": song,
-              "look": bool(data.get("look")), "say": _no_laughs(data.get("say")) or "Ooh, let's talk about something else. Like candy! Have you picked one yet?",
+              "look": bool(data.get("look")), "say": _cap(_no_laughs(data.get("say"))) or "Ooh, let's talk about something else. Like candy! Have you picked one yet?",
               **_sideshow_fields(data)}
     with _lock:
         session["history"] = history + [{"role": "assistant", "content": json.dumps(result)}]
