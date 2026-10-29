@@ -113,6 +113,7 @@ class Listener:
         self.echo_gain, self._echo_frames = 0.0, 0
         self.timing = {}
         self.on_busy = None            # called with True/False around speech recognition (pauses the camera)
+        self.log = None                # optional: for a line every 10 s about hearing over the idle music
 
     # ---- barge-in: someone talks over the pumpkin -------------------------------------------------
     def start_watch(self):
@@ -191,14 +192,16 @@ class Listener:
         """Between visits: listen for a short greeting ("trick or treat", "hello") or a knock on the door.
         Short voiced bursts are transcribed with `stt` (the Pi's own whisper, so nothing leaves the porch
         before a visit) and checked with is_wake(text). Returns ("words", text), ("knock", None), or None
-        when should_stop() says so. While music() is true (his idle video's soundtrack is playing) knocks are
-        ignored (the beat looks like knocking) and speech has to be twice as loud to count."""
+        when should_stop() says so. While music() is true (his idle video's soundtrack is playing), speech and
+        knocks must also be clearly louder than what's left of the music after echo cancelling (learned the
+        same way barge-in learns his voice's echo)."""
         stt = stt or self.stt
         frame_s = Microphone.FRAME_S
+        margin = float(self.cfg["barge_echo_margin"])
         self.mic.flush()
         pre_roll, voiced, chunks, silent, speech = [], [], [], 0, False
         burst, hits, clock = 0, [], 0.0   # knock: how long the current loud burst is; times of short bursts
-        prev = self.noise
+        prev, refs, loudest, report = self.noise, [], 0.0, 10.0
         while not should_stop():
             if not self.mic.ok or stt is None:
                 time.sleep(0.1)
@@ -210,12 +213,30 @@ class Listener:
             rms = float(np.sqrt(np.mean(frame.astype(np.float32) ** 2)))
             clock += frame_s               # audio time (frames can arrive in bursts)
             now = clock
-            playing = music()
-            if knock and not playing:
-                # A knock is a sharp, short thump: a jump far above the room noise that's over in <= 90 ms.
-                sharp = rms > max(self.noise * knock_ratio, float(self.cfg["min_rms"]) * 3) and rms > prev * 3
+            echo = 0.0
+            if music():
+                refs = (refs + [self.mic.heard_level])[-12:]   # what the speaker played in the last ~0.35 s
+                steady = refs[-4:]
+                if len(steady) == 4 and min(steady) > 200:
+                    self._learn_echo(rms / (sum(steady) / 4))
+                echo = self.echo_gain * max(refs) if self._echo_frames >= 30 else float("inf")
+                loudest = max(loudest, rms)
+                if clock >= report and self.log:
+                    report = clock + 10
+                    self.log(f"(over the music: room noise {self.noise:.0f}, music echo {echo:.0f}, "
+                             f"loudest {loudest:.0f}; speech needs "
+                             f"{max(self.noise * float(self.cfg['start_ratio']), float(self.cfg['min_rms']), echo * margin):.0f})",
+                             "info")
+                    loudest = 0.0
+            else:
+                refs = []
+            if knock:
+                # A knock is a sharp, short thump: a jump far above the room noise (and the music's echo) that's
+                # over in <= 90 ms.
+                floor = max(self.noise * knock_ratio, float(self.cfg["min_rms"]) * 3, echo * margin * 1.5)
+                sharp = rms > floor and rms > prev * 3
                 if burst:
-                    if rms > max(self.noise * knock_ratio * 0.4, float(self.cfg["min_rms"])):
+                    if rms > max(self.noise * knock_ratio * 0.4, float(self.cfg["min_rms"]), echo * margin):
                         burst += 1
                     else:
                         if burst <= 3:
@@ -226,11 +247,11 @@ class Listener:
                 elif sharp:
                     burst = 1
                 prev = rms
-            loud = rms > max(self.noise * float(self.cfg["start_ratio"]), float(self.cfg["min_rms"])) * (2 if playing else 1)
+            loud = rms > max(self.noise * float(self.cfg["start_ratio"]), float(self.cfg["min_rms"]), echo * margin)
             if not speech:
                 pre_roll = (pre_roll + [frame])[-10:]
                 voiced = voiced + [frame] if loud else []
-                if not loud:
+                if not loud and not refs:   # room noise is measured between songs, not from the music's echo
                     self.noise = 0.95 * self.noise + 0.05 * rms
                 if len(voiced) >= 5:   # a bit longer than normal listening: knocks and clatter aren't words
                     speech, silent, chunks = True, 0, list(pre_roll)
