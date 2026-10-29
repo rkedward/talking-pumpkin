@@ -394,7 +394,8 @@ class Pumpkin:
                 gx = -gaze[0] / (hfov / 2) * 1.3 * (-1 if self.gaze_flip else 1)
                 ev["gaze"] = [round(max(-1, min(1, gx)), 3), round(max(-1, min(1, gaze[1])), 3)]
             self.hub.publish(ev)
-            time.sleep(1 / 30)
+            # while the idle video shows, the face isn't drawn: fewer updates leave the CPU to the video
+            time.sleep(0.25 if self._idle_on and not self.visit_active else 1 / 30)
 
     # ---- visits --------------------------------------------------------------------------------
     def reveal(self, on):
@@ -623,7 +624,8 @@ class Pumpkin:
     # ---- idle video (e.g. AtmosFX singing pumpkins) ----------------------------------------------------
     def _idle_setup(self, ic):
         self.idle_video_path, self._idle_audio, self._idle_on, self._idle_thread = None, None, False, None
-        self._idle_hold = 0
+        self._idle_playing = False   # its soundtrack is coming out of the speaker right now
+        self._lyrics = ""            # the soundtrack's words (transcribed once), so the song can't wake him
         if not ic["video"]:
             return
         path = config.resolve(ic["video"])
@@ -650,11 +652,31 @@ class Pumpkin:
                 audio = np.clip(audio.astype(np.float32) * vol, -32768, 32767).astype(np.int16)
             self._idle_audio = (audio, rate)
             self.log(f"idle video: soundtrack ready ({len(audio) / rate:.0f} s)")
+            self._idle_lyrics(path, audio, rate)
             if self._idle_on and not self._idle_thread:   # it was already showing silently: start the sound
                 self._idle_on = False
                 self.idle_show(True)
         except Exception as exc:
             self.log(f"idle video: no soundtrack ({type(exc).__name__}: {exc}); the video plays silently")
+
+    def _idle_lyrics(self, path, audio, rate):
+        """Write down the song's words once with the Pi's whisper: those words, leaking through the echo
+        cancelling, mustn't count as a visitor saying hello."""
+        cache = path.with_suffix(".lyrics.txt")
+        try:
+            if cache.exists() and cache.stat().st_mtime >= path.stat().st_mtime:
+                self._lyrics = cache.read_text()
+            elif self.local_stt is not None and getattr(self.local_stt, "local", False):
+                words = []
+                step = rate * 20
+                for i in range(0, len(audio), step):
+                    words.append(self.local_stt.transcribe(audio[i:i + step].astype(np.float32) / 32768.0, rate))
+                self._lyrics = " ".join(words).lower()
+                cache.write_text(self._lyrics)
+            if self._lyrics:
+                self.log(f"idle video: the song's words won't wake him ({len(self._lyrics.split())} words)")
+        except Exception as exc:
+            self.log(f"idle video: couldn't write down the song's words ({exc})")
 
     def idle_show(self, on):
         """Show the idle video (with its soundtrack) or hand over to the live face."""
@@ -684,9 +706,11 @@ class Pumpkin:
             self.hub.publish({"t": "idle", "on": True, "fade": fade, "start": start})
             if aec:
                 self.mic.through_speech = True   # keep hearing "trick or treat" over the music
+            self._idle_playing = True
             try:
                 self.speaker.play_clip(audio, rate, should_stop=lambda: not self._idle_on)
             finally:
+                self._idle_playing = False
                 if aec:
                     self.mic.through_speech = False
 
@@ -710,7 +734,12 @@ class Pumpkin:
         wake_re = re.compile(r"\b(" + "|".join(re.escape(w).replace(r"\ ", r"[\s,.-]*") for w in words) + r")\b")
 
         def is_wake(text):
-            return bool(wake_re.search(text.lower()))
+            found = [m.group(0) for m in wake_re.finditer(text.lower())]
+            if self._idle_playing and self._lyrics:   # the song's own words leaking through don't count
+                found = [w for w in found if w not in self._lyrics]
+                if not found and text:
+                    self.log(f"(ignored, sounds like the song: {text!r})", "info")
+            return bool(found)
 
         while True:
             self.awake = False
@@ -718,7 +747,8 @@ class Pumpkin:
             self.idle_show(True)
             got = self.listener.wait_for_visitor(lambda: self.force_greet or not self.typed.empty(), is_wake,
                                                  stt=self.local_stt, knock=bool(v["knock"]),
-                                                 knock_ratio=float(v["knock_ratio"]), knocks=int(v["knocks"]))
+                                                 knock_ratio=float(v["knock_ratio"]), knocks=int(v["knocks"]),
+                                                 music=lambda: self._idle_playing)
             trigger, said = got if got else ("remote", None)
             if trigger == "remote" and not self.force_greet and not self.typed.empty():
                 trigger, said = "words", self.typed.get_nowait()

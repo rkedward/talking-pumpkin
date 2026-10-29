@@ -186,11 +186,13 @@ class Listener:
         self._echo_frames += 1
 
     # ---- waiting for a visitor (sound-triggered visits) -------------------------------------------------
-    def wait_for_visitor(self, should_stop, is_wake, stt=None, knock=True, knock_ratio=8.0, knocks=2):
+    def wait_for_visitor(self, should_stop, is_wake, stt=None, knock=True, knock_ratio=8.0, knocks=2,
+                         music=lambda: False):
         """Between visits: listen for a short greeting ("trick or treat", "hello") or a knock on the door.
         Short voiced bursts are transcribed with `stt` (the Pi's own whisper, so nothing leaves the porch
         before a visit) and checked with is_wake(text). Returns ("words", text), ("knock", None), or None
-        when should_stop() says so."""
+        when should_stop() says so. While music() is true (his idle video's soundtrack is playing) knocks are
+        ignored (the beat looks like knocking) and speech has to be twice as loud to count."""
         stt = stt or self.stt
         frame_s = Microphone.FRAME_S
         self.mic.flush()
@@ -208,7 +210,8 @@ class Listener:
             rms = float(np.sqrt(np.mean(frame.astype(np.float32) ** 2)))
             clock += frame_s               # audio time (frames can arrive in bursts)
             now = clock
-            if knock:
+            playing = music()
+            if knock and not playing:
                 # A knock is a sharp, short thump: a jump far above the room noise that's over in <= 90 ms.
                 sharp = rms > max(self.noise * knock_ratio, float(self.cfg["min_rms"]) * 3) and rms > prev * 3
                 if burst:
@@ -223,7 +226,7 @@ class Listener:
                 elif sharp:
                     burst = 1
                 prev = rms
-            loud = rms > max(self.noise * float(self.cfg["start_ratio"]), float(self.cfg["min_rms"]))
+            loud = rms > max(self.noise * float(self.cfg["start_ratio"]), float(self.cfg["min_rms"])) * (2 if playing else 1)
             if not speech:
                 pre_roll = (pre_roll + [frame])[-10:]
                 voiced = voiced + [frame] if loud else []

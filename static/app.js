@@ -22,13 +22,14 @@ function log(text, cls = "info") {
 
 // ---- Idle video (e.g. AtmosFX singing pumpkins) while he waits; the live face takes over for a visit ----
 const idleEl = $("idle");
-let idleOn = false, idleTimer = null;
+let idleOn = false, idleTimer = null, faceHidden = false;   // faceHidden: skip drawing (the Pi's CPU goes to the video)
 function idleVideo(ev) {
   const fade = `${ev.fade ?? 1}s`;
   idleEl.style.transition = $("face").style.transition = `opacity ${fade}`;
   clearTimeout(idleTimer);
   if (!ev.on) {
     idleOn = false;
+    faceHidden = false;
     idleEl.style.opacity = 0;
     $("face").style.opacity = 1;
     idleTimer = setTimeout(() => { if (!idleOn) idleEl.pause(); }, (ev.fade ?? 1) * 1000 + 100);
@@ -48,6 +49,7 @@ function idleVideo(ev) {
     idleEl.play().catch(() => {});
     idleEl.style.opacity = 1;
     $("face").style.opacity = 0;
+    setTimeout(() => { if (idleOn) faceHidden = true; }, (ev.fade ?? 1) * 1000 + 100);
   };
   if (idleEl.readyState >= 1) start(); else idleEl.addEventListener("loadedmetadata", start, { once: true });
 }
@@ -126,8 +128,10 @@ function frame(now) {
   const dt = Math.min(0.1, (now - lastFrame) / 1000);
   lastFrame = now;
   if (now - lastFace > 2000) { face.awake = false; face.speaking = false; face.mouthLevel = null; }
-  face.update(now, dt);
-  face.draw(now);
+  if (!faceHidden) {
+    face.update(now, dt);
+    face.draw(now);
+  }
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
