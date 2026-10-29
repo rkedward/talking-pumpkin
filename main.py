@@ -162,7 +162,18 @@ class Pumpkin:
                  (" (mic array cancels his voice)" if aec else " (no echo cancellation: talk up!)"))
         return True
 
-    def say(self, text, interruptible=False):
+    def _log_timing(self, timing, brain_s, heard_at):
+        """One line per reply: where the time went between them stopping talking and him answering."""
+        first = self.speaker.first_sound_at or time.time()
+        voice = first - heard_at - brain_s
+        if timing:
+            total = first - timing["stopped"]
+            self.log(f"⏱ {total:.1f}s from you stopping to him talking: end-of-speech wait {timing['wait']:.1f}, "
+                     f"speech-to-text {timing['stt']:.1f}, brain {brain_s:.1f}, voice {voice:.1f}")
+        else:
+            self.log(f"⏱ brain {brain_s:.1f}s, voice {voice:.1f}s")
+
+    def say(self, text, interruptible=False, on_first_sound=None):
         """Speak. With interruptible and barge-in on, stops as soon as someone talks over him and returns
         the part he got out (their words go to the next listen()); otherwise returns None."""
         if not text:
@@ -180,6 +191,15 @@ class Pumpkin:
 
         if watch:
             self.listener.start_watch()
+        self.speaker.first_sound_at = None
+        if on_first_sound:   # once the first word has been heard
+            def wait_first():
+                while self.speaking and self.speaker.first_sound_at is None:
+                    time.sleep(0.02)
+                if self.speaker.first_sound_at:
+                    time.sleep(max(0.0, self.speaker.first_sound_at - time.time()))
+                on_first_sound()
+            threading.Thread(target=wait_first, daemon=True).start()
         try:
             self.speaker.speak(text, on_level=self._set_mouth, on_sentence=on_sentence,
                                should_stop=lambda: self.abort_visit or (watch and self.listener.interrupted.is_set()))
@@ -373,6 +393,7 @@ class Pumpkin:
                     forced = False
                 continue
             self.log(f"👂 {heard}", "heard")
+            heard_at, timing, self.listener.timing = time.time(), self.listener.timing, {}
             self.set_state("thinking")
             on_stage = self.show.active() if self.show else None
             try:
@@ -382,7 +403,8 @@ class Pumpkin:
                 self.log(f"claude error: {type(exc).__name__}: {exc}")
                 reply = {"say": "Ooh, my pumpkin brain went fuzzy. Happy Halloween!"}
             self.mood(reply.get("mood"))
-            cut_off = self.say(reply["say"], interruptible=True)
+            brain_s = time.time() - heard_at
+            cut_off = self.say(reply["say"], interruptible=True, on_first_sound=lambda: self._log_timing(timing, brain_s, heard_at))
             if cut_off is not None:   # they talked over him: skip the rest and hear them out
                 turns += 1
                 continue
@@ -490,7 +512,6 @@ class Pumpkin:
         threading.Thread(target=track, daemon=True).start()
         started = time.time()
         time.sleep(1.5)                                    # room noise
-        quiet_n = sum(len(b) for b in self.mic.recording)
         barged_at = None
         if self.barge_in:
             self.listener.start_watch()
@@ -508,19 +529,29 @@ class Pumpkin:
             self.listener.reset()
         time.sleep(1.0)
         stop.set()
-        audio = np.concatenate(self.mic.recording) if self.mic.recording else np.zeros((0, 1), np.int16)
-        self.mic.recording = None
+        rec, self.mic.recording = self.mic.recording, None
+        if not rec:
+            self.log("echo test: the mic recorded nothing")
+            return
+        audio = np.concatenate([b for _, b in rec])
+        # When the first recorded sample was actually heard: its callback time, minus the block itself and
+        # the input buffer.
+        in_lat = float(getattr(getattr(self.mic, "stream", None), "latency", 0) or 0)
+        ends = np.cumsum([len(b) for _, b in rec])                  # sample count at the end of each block
+        cb_t = np.array([t_ for t_, _ in rec]) - in_lat
+        clock = lambda samples: np.interp(samples, ends, cb_t)       # sample index -> when it was heard
+        t0 = float(clock(0)) if len(rec) < 2 else float(cb_t[0] - ends[0] / rate)
 
         # Per 30 ms frame: mic loudness on each channel, and whether the speaker was playing then.
         block = int(rate * fs)
         n = len(audio) // block
         frames = audio[:n * block].reshape(n, block, -1).astype(np.float32)
         rms = np.sqrt(np.mean(frames ** 2, axis=1))                  # (frames, channels)
-        t = started + np.arange(n) * fs
+        t = clock(np.arange(n) * block + block / 2)
         lt = np.array([x[0] for x in levels]) if levels else np.zeros(1)
         lv = np.array([x[1] for x in levels]) if levels else np.zeros(1)
         playing = np.interp(t, lt, lv) > 200
-        quiet = np.arange(n) < quiet_n // block
+        quiet = t < play_from
         db = lambda a, b: 20 * np.log10(max(a, 1.0) / max(b, 1.0))
         lines = []
         for ch in range(rms.shape[1]):
@@ -548,6 +579,11 @@ class Pumpkin:
                    else "echo is NOT being cancelled")
         if self.barge_in:
             verdict += "; barge-in " + ("WOULD have interrupted itself" if barged_at else "stayed quiet (good)")
+        lag = self._mouth_lag(audio, rate, clock, lt, lv)
+        if lag is not None:
+            self.log(f"🔊 lip sync: the sound reaches the mic {lag * 1000:+.0f} ms after the mouth moves "
+                     f"(mouth_delay is {self.speaker.mouth_delay:.2f}; try [tts] mouth_delay = "
+                     f"{max(0.0, self.speaker.mouth_delay + lag):.2f})")
         self.log(f"🔊 echo test: {verdict}. Recording: /echotest.wav")
         try:
             with wave.open(str(config.ROOT / "static" / "echotest.wav"), "wb") as w:
@@ -557,6 +593,31 @@ class Pumpkin:
                 w.writeframes(audio.astype(np.int16).tobytes())
         except Exception as exc:
             self.log(f"echo test: couldn't save the recording ({exc})")
+
+    @staticmethod
+    def _mouth_lag(audio, rate, clock, lt, lv):
+        """How much later the voice actually sounds than the mouth timeline says, in seconds: the lag that
+        best lines up the loudest (least echo-cancelled) mic channel with what was played."""
+        if len(lt) < 50:
+            return None
+        step = 0.01
+        block = int(rate * step)
+        n = len(audio) // block
+        env = np.sqrt(np.mean(audio[:n * block].reshape(n, block, -1).astype(np.float32) ** 2, axis=1))
+        env = env[:, int(np.argmax(env.max(axis=0)))]
+        t = clock(np.arange(n) * block + block / 2)
+        played = np.interp(t, lt, lv, left=0, right=0)
+        if played.max() < 200 or env.max() < 50:
+            return None
+        a = np.log1p(played) - np.log1p(played).mean()
+        b = np.log1p(env) - np.log1p(env).mean()
+        best, best_lag = -1e9, 0
+        for k in range(-20, 61):          # -200 .. +600 ms
+            x, y = (a[:len(a) - k], b[k:]) if k >= 0 else (a[-k:], b[:len(b) + k])
+            c = float(np.dot(x, y)) / max(len(x), 1)
+            if c > best:
+                best, best_lag = c, k
+        return best_lag * step
 
     def command(self, name, data):
         if name == "echo_test":

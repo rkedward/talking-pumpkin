@@ -79,7 +79,7 @@ class Microphone:
 
     def _callback(self, indata, frames, t, status):
         if self.recording is not None:          # echo test: every channel, never muted
-            self.recording.append(indata.copy())
+            self.recording.append((time.time(), indata.copy()))
         if self.user_muted or time.time() < self.muted_until:
             return
         try:
@@ -111,6 +111,7 @@ class Listener:
         self._carry = []               # audio of whoever interrupted, picked up by the next listen()
         self._watcher = None
         self.echo_gain, self._echo_frames = 0.0, 0
+        self.timing = {}
 
     # ---- barge-in: someone talks over the pumpkin -------------------------------------------------
     def start_watch(self):
@@ -230,7 +231,11 @@ class Listener:
                 too_long = len(chunks) * frame_s > float(self.cfg["max_utterance_s"])
                 if silent * frame_s >= float(self.cfg["silence_end_s"]) or too_long:
                     audio = np.concatenate(chunks).astype(np.float32) / 32768.0
+                    stt_from = time.time()
                     text = self.stt.transcribe(audio, self.mic.rate)
+                    # for the response-time log: when they stopped talking, and how long recognition took
+                    self.timing = {"stopped": stt_from - silent * frame_s, "wait": silent * frame_s,
+                                   "stt": time.time() - stt_from}
                     if text:
                         return text
                     # Nothing intelligible: keep listening until the deadline.
@@ -525,6 +530,11 @@ class Speaker:
         self.pause = float(cfg.get("sentence_pause", 0.35))
         self.question_pause = float(cfg.get("question_pause", 1.0))   # longer beat after a question
         self.lead_in = float(cfg.get("lead_in", 0.3))
+        # Extra delay for the mouth, for speakers that sound later than their buffer says (see the echo test).
+        self.mouth_delay = float(cfg.get("mouth_delay", 0.0))
+        if self.aec:   # played straight to the mic array: nothing to wake up, so hardly any lead-in
+            self.lead_in = min(self.lead_in, float(cfg.get("array_lead_in", 0.05)))
+        self.first_sound_at = None    # when the first word of the last reply was heard (response-time log)
         self.laughs = []   # recorded laughs, played instead of a spoken "Ho ho ho!"
         folder = resolve(cfg.get("laugh_dir", "sounds/laughs"))
         for path in sorted(folder.glob("*.wav")) if folder.is_dir() else []:
@@ -540,6 +550,7 @@ class Speaker:
             self._speak(text, on_level, on_sentence, should_stop)
 
     def _speak(self, text, on_level, on_sentence, should_stop):
+        self.first_sound_at = None
         sentences = _sentences(text)
         if not self.laughs and getattr(self.tts, "cloud", False):
             # Spoken on its own, "Ho ho ho!" gets read out as words; said right after the joke, the voice laughs.
@@ -691,7 +702,10 @@ class Speaker:
         levels = np.clip(rms / ref, 0, 1) ** 0.6
         if not self.mic.through_speech:
             self.mic.mute_for(len(audio) / rate + (stream.latency or 0) + 0.6)   # don't listen to ourselves
-        delay = int(round((stream.latency or 0) / self.BLOCK_S))  # blocks written but not yet heard
+        # blocks written but not yet heard (plus any extra delay the echo test measured)
+        delay = int(round(((stream.latency or 0) + self.mouth_delay) / self.BLOCK_S))
+        if self.first_sound_at is None:
+            self.first_sound_at = time.time() + (stream.latency or 0) + self.mouth_delay
         for i in range(n_blocks):
             if should_stop():
                 break

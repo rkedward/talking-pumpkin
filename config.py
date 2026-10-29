@@ -52,7 +52,7 @@ DEFAULTS = {
         "rate": 16000,
         "start_ratio": 3.0,           # speech = this many times louder than the background noise
         "min_rms": 250,
-        "silence_end_s": 0.8,
+        "silence_end_s": 0.6,         # pause that ends what they say: lower answers sooner, too low cuts them off
         "max_utterance_s": 8,
         # Barge-in: keep listening while the pumpkin talks and stop when someone talks over him. "auto" turns
         # it on when he plays through the mic array (its 3.5 mm jack or speaker connector), whose echo
@@ -78,6 +78,7 @@ DEFAULTS = {
                                       # the mic array's jack, which lets barge-in cancel the echo
         "sentence_pause": 0.35,       # seconds of silence after each sentence
         "question_pause": 1.0,        # seconds of silence after a question
+        "mouth_delay": 0.0,           # seconds to hold the mouth back if it moves before the sound (the echo test measures it)
         "output_latency": 0.25,       # speaker buffer, seconds: raise (0.4) if speech is choppy, lower for tighter lip sync
         "piper_voice": "models/voices/en_US-ryan-medium.onnx",
         "piper_length_scale": 1.15,   # >1 is slower
