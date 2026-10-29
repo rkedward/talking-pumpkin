@@ -41,10 +41,10 @@ DEFAULTS = {
     "visit": {
         "arrive_s": 0.9,              # person must be in view this long before the greeting
         "gone_s": 3.5,                # nobody seen this long = visit over
-        "max_turns": 5,
-        "max_visit_s": 90,
-        "game_extra_turns": 4,        # a visit that plays the song game gets this many more turns ...
-        "game_extra_s": 60,           # ... and this much more time
+        "max_turns": 3,
+        "max_visit_s": 45,
+        "game_extra_turns": 3,        # a visit that plays the song game gets this many more turns ...
+        "game_extra_s": 40,           # ... and this much more time
         "listen_s": 8,                # how long to wait for each question
         "regreet_s": 12,
         # What starts a visit: "sound" = someone says hello / trick or treat, knocks, rings the doorbell (or the

@@ -17,8 +17,8 @@ flip_vertical = false
 min_height = 0.25              # lower (e.g. 0.15) if kids stand far from the camera
 
 [visit]
-max_turns = 5
-max_visit_s = 90
+max_turns = 3
+max_visit_s = 45
 # trigger = "sound"            # sound: "trick or treat" / hello, a knock, the doorbell or Greet start a visit and
                                # the camera only takes a picture; camera: person detection starts it (old way)
 # knock_ratio = 8.0            # higher = a knock has to be louder to count

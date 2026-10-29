@@ -306,7 +306,7 @@ The most useful ones:
 | `[claude] model` | `claude-opus-5-5` | `claude-haiku-5-5` replies faster. |
 | `[camera] hfov_deg` | 66 | Camera's horizontal field of view (Camera Module 3 Wide: 102). Used to match voices to people. |
 | `[detector] min_height` | 0.25 | Smallest person (fraction of frame height) that counts as a visitor. |
-| `[visit] max_turns`, `max_visit_s` | 5, 90 | Wrap up so the line keeps moving. |
+| `[visit] max_turns`, `max_visit_s` | 3, 45 | Wrap up so the line keeps moving. |
 | `[visit] trigger` | `sound` | `sound`: words, a knock, the doorbell or Greet start a visit; `camera`: person detection does. |
 | `[stt] model` | `base.en` | `tiny.en` is faster, `small.en` more accurate (slower on the Pi). |
 | `[stt] engine` | `whisper` | `openai` sends speech to OpenAI (needs `OPENAI_API_KEY`): about 0.5 s faster and much better with kids' voices, at well under a cent a visit. Whisper on the Pi takes over if the internet drops. Visitors' voices leave the porch, so a small sign is a nice touch. |
