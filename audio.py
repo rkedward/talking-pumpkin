@@ -376,17 +376,33 @@ class OpenAITTS:
         log(f"voice: OpenAI {self.model} {self.voice}")
 
     def synth(self, text):
+        with urllib.request.urlopen(self._request(text), timeout=30) as r:
+            data = r.read()
+        return np.frombuffer(data[:len(data) // 2 * 2], np.int16), self.RATE
+
+    def _request(self, text):
         body = {"model": self.model, "voice": self.voice, "input": text, "response_format": "pcm"}
         if self.instructions and not self.model.startswith("tts-1"):
             body["instructions"] = self.instructions
         if self.speed != 1.0:
             body["speed"] = self.speed
-        req = urllib.request.Request(
+        return urllib.request.Request(
             "https://api.openai.com/v1/audio/speech", data=json.dumps(body).encode(),
             headers={"Authorization": f"Bearer {self.key}", "Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=30) as r:
-            data = r.read()
-        return np.frombuffer(data[:len(data) // 2 * 2], np.int16), self.RATE
+
+    def stream(self, text):
+        """The voice as it arrives (int16 chunks at RATE), so playback can start before the whole sentence
+        is made."""
+        with urllib.request.urlopen(self._request(text), timeout=30) as r:
+            odd = b""
+            while True:
+                data = r.read1(4800) if hasattr(r, "read1") else r.read(4800)
+                if not data:
+                    break
+                data, odd = odd + data, b""
+                if len(data) % 2:
+                    data, odd = data[:-1], data[-1:]
+                yield np.frombuffer(data, np.int16)
 
 
 class EspeakTTS:
@@ -425,6 +441,24 @@ class _WithBackup:
                 self.log(f"voice: {self.name} failed ({exc} {detail}); using the backup voice")
                 self.warned = time.time()
             return self.backup.synth(text)
+
+    @property
+    def rate(self):
+        return getattr(self.main, "RATE", None)
+
+    def stream(self, text):
+        """Stream the cloud voice; if it fails before any sound arrives, the whole sentence from the backup."""
+        got = False
+        try:
+            for chunk in self.main.stream(text):
+                got = True
+                yield chunk, self.main.RATE
+        except Exception as exc:
+            if got:
+                self.log(f"voice: {self.name} stream broke off ({exc})")
+                return
+            audio, rate = self.synth(text)
+            yield audio, rate
 
 
 def make_tts(cfg, log):
@@ -466,6 +500,39 @@ def _resample(audio, rate, new_rate):
     return np.clip(out, -32768, 32767).astype(np.int16)
 
 
+class _StreamResampler:
+    """_resample for audio that arrives in pieces: same low-pass and interpolation, no clicks at the joins."""
+
+    HALF = 32
+
+    def __init__(self, rate, new_rate):
+        self.rate, self.new_rate = rate, new_rate
+        self.raw = np.zeros(self.HALF, np.float32)         # input so far (with a little silence in front)
+        self.filtered = np.zeros(0, np.float32)
+        self.out_n = 0
+        cut = 0.45 * min(1.0, new_rate / rate)
+        k = np.arange(-self.HALF, self.HALF + 1)
+        taps = 2 * cut * np.sinc(2 * cut * k) * np.hamming(len(k))
+        self.taps = (taps / taps.sum()).astype(np.float32)
+
+    def feed(self, chunk, last=False):
+        if self.rate == self.new_rate:
+            return chunk
+        self.raw = np.concatenate([self.raw, chunk.astype(np.float32)] + ([np.zeros(self.HALF, np.float32)] if last else []))
+        done = len(self.filtered)
+        # filtered[i] is centred on raw[i + HALF]
+        new = np.convolve(self.raw[done:], self.taps, mode="valid")
+        self.filtered = np.concatenate([self.filtered, new])
+        step = self.rate / self.new_rate
+        n_total = int((len(self.filtered) - 1) / step) + 1 if len(self.filtered) else 0
+        if n_total <= self.out_n:
+            return np.zeros(0, np.int16)
+        pos = np.arange(self.out_n, n_total) * step
+        self.out_n = n_total
+        out = np.interp(pos, np.arange(len(self.filtered)), self.filtered)
+        return np.clip(out, -32768, 32767).astype(np.int16)
+
+
 def _trim(audio, rate, threshold=300, keep_s=0.04):
     """Cut the silence a voice engine leaves before and after a sentence; the pause settings decide the gaps."""
     loud = np.flatnonzero(np.abs(audio.astype(np.int32)) > threshold)
@@ -494,6 +561,20 @@ def _load_wav(path):
 
 def _sentences(text):
     return [s.strip() for s in re.findall(r"[^.!?]+[.!?]*", text) if s.strip()] or [text]
+
+
+class _Streamed:
+    """A sentence whose voice is played as it arrives from the cloud."""
+
+    def __init__(self, tts, text, pause):
+        self.tts, self.text, self.pause = tts, text, pause
+
+    def chunks(self):
+        if isinstance(self.tts, _WithBackup):
+            yield from self.tts.stream(self.text)
+        else:
+            for chunk in self.tts.stream(self.text):
+                yield chunk, self.tts.RATE
 
 
 class Speaker:
@@ -535,6 +616,9 @@ class Speaker:
         if self.aec:   # played straight to the mic array: nothing to wake up, so hardly any lead-in
             self.lead_in = min(self.lead_in, float(cfg.get("array_lead_in", 0.05)))
         self.first_sound_at = None    # when the first word of the last reply was heard (response-time log)
+        self.mouth_lead = float(cfg.get("mouth_lead", 0.1))
+        self.stream_first = bool(cfg.get("stream_first", True))   # cloud voice: play sentence 1 as it arrives
+        self._timeline, self._next_heard, self._mouth_on, self._mouth_thread = [], None, False, None
         self.laughs = []   # recorded laughs, played instead of a spoken "Ho ho ho!"
         folder = resolve(cfg.get("laugh_dir", "sounds/laughs"))
         for path in sorted(folder.glob("*.wav")) if folder.is_dir() else []:
@@ -547,7 +631,11 @@ class Speaker:
 
     def speak(self, text, on_level, on_sentence=None, should_stop=lambda: False):
         with Speaker._output_lock:
-            self._speak(text, on_level, on_sentence, should_stop)
+            self._start_mouth(on_level)
+            try:
+                self._speak(text, on_level, on_sentence, should_stop)
+            finally:
+                self._stop_mouth(cut=should_stop())
 
     def _speak(self, text, on_level, on_sentence, should_stop):
         self.first_sound_at = None
@@ -583,10 +671,18 @@ class Speaker:
 
         def producer():
             if getattr(self.tts, "cloud", False):
+                rest = sentences
+                if self.stream_first and hasattr(getattr(self.tts, "main", self.tts), "stream") and sentences and \
+                        not (self.laughs and _is_laugh(sentences[0])):
+                    # The first sentence plays while it is still arriving, so he starts talking sooner.
+                    s0 = sentences[0]
+                    pause = self.question_pause if s0.rstrip().endswith("?") else self.pause
+                    ready.put((s0, _Streamed(self.tts, s0, pause), getattr(self.tts, "rate", None) or 24000))
+                    rest = sentences[1:]
                 # Cloud voices take a second or more per request: ask for every sentence at once (in order), so
                 # the next one is ready before the current one ends instead of leaving a gap.
                 with ThreadPoolExecutor(max_workers=4) as pool:
-                    for item in pool.map(make, sentences):
+                    for item in pool.map(make, rest):
                         ready.put(item)
             else:
                 for s in sentences:
@@ -607,24 +703,30 @@ class Speaker:
                 sentence, audio, rate = item
                 if on_sentence:
                     on_sentence(sentence)
-                if audio is None or len(audio) == 0:
+                streamed = isinstance(audio, _Streamed)
+                if audio is None or (not streamed and len(audio) == 0):
                     self._mime(sentence, on_level, should_stop)
                     continue
                 out_rate, channels = self._format(rate)
-                if out_rate != rate:
+                if out_rate != rate and not streamed:
                     audio = _resample(audio, rate, out_rate)
-                    rate = out_rate
+                rate = out_rate
                 if stream is None or rate != stream_rate:
                     if stream is not None:
                         self._close(stream)
                     stream, stream_rate = self._open(rate, channels), rate
                     # lead-in silence so the speaker is awake before the first word
                     stream.write(np.zeros((int(rate * self.lead_in), channels), np.int16))
-                self._play(stream, audio, rate, on_level, should_stop)
+                if streamed:
+                    try:
+                        self._play_stream(stream, audio.chunks(), rate, audio.pause, on_level, should_stop)
+                    except Exception as exc:
+                        self.log(f"voice error: {exc}")
+                else:
+                    self._play(stream, audio, rate, on_level, should_stop)
         finally:
             if stream is not None:
                 self._close(stream, cut=should_stop())
-            on_level(0.0)
 
     def _format(self, rate):
         """A sample rate and channel count the output device accepts. A speaker picked by name is opened
@@ -656,7 +758,11 @@ class Speaker:
     def play_clip(self, audio, rate, on_level=lambda level: None, should_stop=lambda: False):
         """Play ready-made audio (a song for the game) through the same speaker."""
         with Speaker._output_lock:
-            self._play_clip(audio, rate, on_level, should_stop)
+            self._start_mouth(on_level)
+            try:
+                self._play_clip(audio, rate, on_level, should_stop)
+            finally:
+                self._stop_mouth(cut=should_stop())
 
     def _play_clip(self, audio, rate, on_level, should_stop):
         if not sd or audio is None or not len(audio):
@@ -670,10 +776,10 @@ class Speaker:
             self._play(stream, audio, rate, on_level, should_stop)
         finally:
             self._close(stream, cut=should_stop())
-            on_level(0.0)
 
     def _open(self, rate, channels=1):
         self.channels = channels
+        self._next_heard = None   # when the next block written will be heard
         stream = sd.OutputStream(samplerate=rate, channels=channels, dtype="int16", device=self.device,
                                  blocksize=max(1, int(rate * self.BLOCK_S)), latency=self.latency)
         stream.start()
@@ -700,21 +806,102 @@ class Speaker:
         rms = np.sqrt(np.mean(blocks.astype(np.float32) ** 2, axis=1))
         ref = max(np.percentile(rms, 90), 1.0)
         levels = np.clip(rms / ref, 0, 1) ** 0.6
-        if not self.mic.through_speech:
-            self.mic.mute_for(len(audio) / rate + (stream.latency or 0) + 0.6)   # don't listen to ourselves
-        # blocks written but not yet heard (plus any extra delay the echo test measured)
-        delay = int(round(((stream.latency or 0) + self.mouth_delay) / self.BLOCK_S))
-        if self.first_sound_at is None:
-            self.first_sound_at = time.time() + (stream.latency or 0) + self.mouth_delay
-        for i in range(n_blocks):
+        self._write(stream, zip(blocks, levels, rms), on_level, should_stop)
+
+    def _play_stream(self, stream, chunks, rate, pause, on_level, should_stop):
+        """Play a sentence while it is still arriving: (int16 chunk, sample rate) pairs."""
+        block = max(1, int(rate * self.BLOCK_S))
+        resampler, buf, started, ref = None, np.zeros(0, np.int16), False, 1500.0
+        keep = int(rate * 0.04)
+
+        def blocks():
+            nonlocal resampler, buf, started, ref
+            for chunk, in_rate in chunks:
+                if should_stop():
+                    return
+                if resampler is None:
+                    resampler = _StreamResampler(in_rate, rate)
+                piece = resampler.feed(chunk)
+                buf = np.concatenate([buf, piece])
+                if not started:                       # skip the silence the voice starts with
+                    loud = np.flatnonzero(np.abs(buf.astype(np.int32)) > 300)
+                    if not len(loud):
+                        buf = buf[-keep:]
+                        continue
+                    buf, started = buf[max(0, loud[0] - keep):], True
+                while len(buf) >= block:
+                    out, buf = buf[:block], buf[block:]
+                    r = float(np.sqrt(np.mean(out.astype(np.float32) ** 2)))
+                    ref = max(ref * 0.999, r * 0.9)   # loudness so far stands in for the whole sentence's
+                    yield out, min(1.0, r / ref) ** 0.6, r
+            if resampler is not None:
+                buf = np.concatenate([buf, resampler.feed(np.zeros(0, np.int16), last=True)])
+            if started and len(buf):
+                yield np.pad(buf, (0, block - len(buf))), 0.0, 0.0
+            for _ in range(int(pause / self.BLOCK_S)):
+                yield np.zeros(block, np.int16), 0.0, 0.0
+
+        self._write(stream, blocks(), on_level, should_stop)
+
+    def _write(self, stream, items, on_level, should_stop):
+        """Write (block, mouth level, loudness) items. Each block's level goes on a timeline at the moment the
+        block will actually be heard; a separate clock (_mouth_loop) moves the mouth from that timeline. Timing
+        the mouth on when writes return made it jerky: the driver releases writes in bursts."""
+        latency = (stream.latency or 0) + self.mouth_delay
+        for out, level, rms in items:
             if should_stop():
                 break
-            out = blocks[i]
+            now = time.time()
+            if self._next_heard is None or self._next_heard < now:      # start, or after a gap/underrun
+                self._next_heard = now + latency
+            if self.first_sound_at is None:
+                self.first_sound_at = self._next_heard
+            if not self.mic.through_speech:                  # don't listen to ourselves
+                self.mic.mute_for(self._next_heard - now + self.BLOCK_S + 0.6)
             if Speaker.volume != 1.0:
                 out = np.clip(out.astype(np.float32) * Speaker.volume, -32768, 32767).astype(np.int16)
+            self._timeline.append((self._next_heard, float(level), float(rms) * Speaker.volume))
+            self._next_heard += len(out) / stream.samplerate
             stream.write(out if self.channels == 1 else np.repeat(out[:, None], self.channels, axis=1))
-            on_level(float(levels[i - delay]) if i >= delay else 0.0)
-            self.mic.heard_level = float(rms[i - delay]) * Speaker.volume if i >= delay else 0.0
+
+    def _start_mouth(self, on_level):
+        """Move the mouth (and tell barge-in what is being heard) by the clock until _stop_mouth."""
+        self._timeline, self._next_heard = [], None
+        self._mouth_on = True
+
+        def loop():
+            lead = self.mouth_lead
+            while self._mouth_on or (self._timeline and self._timeline[-1][0] > time.time()):
+                now = time.time()
+                level = heard = None
+                tl = self._timeline
+                i = 0
+                while i < len(tl) and tl[i][0] <= now + lead:     # the mouth runs a little early: the face
+                    level = tl[i][1]                               # page and projector add their own delay
+                    i += 1
+                j = 0
+                while j < len(tl) and tl[j][0] <= now:
+                    heard = tl[j][2]
+                    j += 1
+                if j > 1:
+                    del tl[:j - 1]
+                if level is not None:
+                    on_level(level)
+                self.mic.heard_level = heard if heard is not None else 0.0
+                time.sleep(0.01)
+            on_level(0.0)
+            self.mic.heard_level = 0.0
+
+        self._mouth_thread = threading.Thread(target=loop, daemon=True, name="mouth")
+        self._mouth_thread.start()
+
+    def _stop_mouth(self, cut=False):
+        if cut:
+            self._timeline = []
+        self._mouth_on = False
+        if self._mouth_thread:
+            self._mouth_thread.join(timeout=2)
+            self._mouth_thread = None
 
     def _mime(self, sentence, on_level, should_stop):
         """No audio available: move the mouth at a speaking pace so the face still 'talks'."""

@@ -78,6 +78,8 @@ DEFAULTS = {
                                       # the mic array's jack, which lets barge-in cancel the echo
         "sentence_pause": 0.35,       # seconds of silence after each sentence
         "question_pause": 1.0,        # seconds of silence after a question
+        "mouth_lead": 0.1,            # move the mouth this much early: the face page and projector lag a little
+        "stream_first": True,         # cloud voices: start playing the first sentence while it is still arriving
         "mouth_delay": 0.0,           # seconds to hold the mouth back if it moves before the sound (the echo test measures it)
         "output_latency": 0.25,       # speaker buffer, seconds: raise (0.4) if speech is choppy, lower for tighter lip sync
         "piper_voice": "models/voices/en_US-ryan-medium.onnx",
