@@ -180,7 +180,7 @@ class Pumpkin:
         the part he got out (their words go to the next listen()); otherwise returns None."""
         if not text:
             return None
-        if isinstance(text, str):         # (a streamed reply is logged once it is complete)
+        if isinstance(text, str):         # (a streamed reply is logged as each sentence starts)
             self.log(f"🎃 {text}", "said")
         before = self.state
         self.set_state("speaking")
@@ -188,8 +188,12 @@ class Pumpkin:
         watch = interruptible and self.barge_in
         spoken = []
 
+        streamed = not isinstance(text, str)
+
         def on_sentence(sentence):
             spoken.append(sentence)
+            if streamed:                  # a streamed reply is logged sentence by sentence as he says it
+                self.log(f"🎃 {sentence}", "said")
             self._on_sentence(sentence)
 
         if watch:
@@ -435,8 +439,6 @@ class Pumpkin:
                 turns += 1
                 continue
             brain_thread.join(timeout=10)
-            if first is not None:
-                self.log(f"🎃 {reply.get('say', '')}", "said")
             self.sideshow(reply)
             if reply.get("play_song") and not self.abort_visit:
                 if not game_on:   # a game takes a few more turns than a chat
