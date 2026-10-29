@@ -117,6 +117,7 @@ class Pumpkin:
         self.listener = Listener(self.mic, cfg["mic"], stt)
         self.speaker = Speaker(make_tts(cfg["tts"], self.log), cfg["tts"], self.mic, self.log)
         self.barge_in = self._barge_in_setup(cfg["mic"])
+        self._echo_lock = threading.Lock()
         Speaker.volume = float(saved.get("volume", 1.0))
         self.show = None
         if cfg["window"]["enabled"]:
@@ -142,6 +143,13 @@ class Pumpkin:
         if mode in ("false", "off", "no", "0") or not self.mic.ok or self.listener.stt is None:
             return False
         aec = self.speaker.aec
+        if aec and str(self.cfg["mic"]["channel"]) == "auto" and "xvf3800" in self.mic.name.lower() \
+                and self.mic.channel != 0:
+            # Measured on the XVF3800 USB firmware: channel 0 (conference) has the pumpkin's voice cancelled,
+            # channel 1 (speech recognition) still carries it at full volume. Listen on 0 when he plays
+            # through the array.
+            self.mic.channel = 0
+            self.log("mic: listening on channel 0, which has the echo cancelled")
         if mode == "auto" and not aec:
             if self.mic.is_array:
                 self.log("barge-in off: plug the speaker into the mic array and set [tts] output_device = "
@@ -454,6 +462,15 @@ class Pumpkin:
         """Debug-panel button: play speech through the speaker while recording the mic array, and report how
         much of the pumpkin's own voice gets through (echo cancellation) and whether barge-in would have
         interrupted him. The recording is saved as static/echotest.wav (one channel per mic channel)."""
+        if not self._echo_lock.acquire(blocking=False):
+            self.log("echo test: already running")
+            return
+        try:
+            self._echo_test()
+        finally:
+            self._echo_lock.release()
+
+    def _echo_test(self):
         if self.awake or self.speaking or not self.mic.ok:
             self.log("echo test: " + ("no microphone" if not self.mic.ok else "busy, try again after the visit"))
             return
