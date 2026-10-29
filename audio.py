@@ -438,7 +438,7 @@ def _clean_transcript(text):
     words = " ".join(re.findall(r"[a-z]+", text.lower()))
     if len(words.split()) >= 3 and f" {words} " in " " + " ".join(re.findall(r"[a-z]+", STT_PROMPT.lower())) + " ":
         return ""   # three or more words straight out of the prompt: an echo, not a kid
-    if re.fullmatch(r"\s*\w+\s*:\s*", text):
+    if re.fullmatch(r"[\s\[\](){}*\"']*\w+\s*:[\s\[\](){}*\"']*", text):
         return ""   # a lone "context:" or "transcript:": the recognizer's formatting, not a kid
     if text.lower() in _HALLUCINATIONS or re.fullmatch(r"[\W_]*", text):
         return ""
