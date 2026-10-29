@@ -39,6 +39,8 @@ WRAPUPS = [
     "I'd love to chat all night, but more trick-or-treaters are coming. Grab some candy and have a spook-tacular Halloween! Ho ho ho!",
     "Okay, my candle's flickering! Take some candy, and happy Halloween! Hee hee!",
 ]
+SILLY_FACES = {"silly", "tongue", "crosseyed", "wink", "dizzy", "scared"}
+FLASH_BEAT_S = 1.2   # a silly face shows this long before he starts talking (the face page flashes it 1.5 s)
 NUDGES = ["Hello? Are you still there?", "Helloooo? Anybody still there?", "Did you sneak off with my candy? Are you still there?"]
 BYE_RE = re.compile(r"\b(bye|goodbye|see you|see ya|gotta go|got to go|we have to go)\b", re.I)
 GOODBYES = ["Bye bye! Happy Halloween! Ho ho ho!", "See you later, alligator! Happy haunting!", "Bye bye! Hee hee, that was fun!"]
@@ -96,6 +98,7 @@ class Pumpkin:
         self.force_greet = False
         self.typed = queue.Queue()
         self._scaring = False
+        self._flash_at = 0.0
         self.visit_active = False
         self.history = collections.deque(maxlen=400)   # recent log lines, for the remote control (mcp_server.py)
         self.visit_session = ""
@@ -233,6 +236,10 @@ class Pumpkin:
         the part he got out (their words go to the next listen()); otherwise returns None."""
         if not text:
             return None
+        beat = FLASH_BEAT_S - (time.time() - self._flash_at)
+        if 0 < beat <= FLASH_BEAT_S:      # a silly face just flashed: hold it a beat before talking
+            time.sleep(beat)
+        self._flash_at = 0.0
         if isinstance(text, str):         # (a streamed reply is logged as each sentence starts)
             self.log(f"🎃 {text}", "said")
         before = self.state
@@ -302,6 +309,8 @@ class Pumpkin:
         name = name or "happy"
         if name != "neutral":
             self.log(f"🎭 {name}", "mood")
+        if name in SILLY_FACES:   # the face flashes for a beat; say() waits for it before talking
+            self._flash_at = time.time()
         self.hub.publish({"t": "mood", "name": name})
 
     def _on_sentence(self, sentence):

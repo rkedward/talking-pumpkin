@@ -42,8 +42,9 @@ export const EXPRESSIONS = {
              shake: 1.4, lean: 1.5 },
   scared: { brow: 0.9, browTilt: 0.9, eye: 1.15, pupil: 0.55, smile: -0.4, round: 0.5, shake: 1, lean: 0.96 },
 };
-// Silly faces win over the listening/thinking looks and per-sentence accents while they last.
+// Silly faces are a quick flash to get a reaction (FLASH_MS), then he goes back to a normal happy face.
 const SILLY = new Set(["silly", "tongue", "crosseyed", "wink", "dizzy", "scared"]);
+const FLASH_MS = 1500;
 EXPRESSIONS.quizzical = EXPRESSIONS.curious;
 
 export class PumpkinFace {
@@ -103,13 +104,14 @@ export class PumpkinFace {
   setVisible(on) { this.visible = on; }
   setMood(name) {
     this.mood = EXPRESSIONS[name] ? name : "neutral";
-    if (SILLY.has(this.mood)) this.sillyUntil = performance.now() + 4000;
+    if (SILLY.has(this.mood)) {
+      this.flash = { name: this.mood, until: performance.now() + FLASH_MS };
+      this.mood = "happy";
+    }
   }
   setAccent(name, ms = 1500) { if (EXPRESSIONS[name]) this.accent = { name, until: performance.now() + ms }; }
   setState(state) {
     if (state !== this.state && (state === "speaking" || state === "listening")) this.nod = 1;   // a little nod
-    if (this.state === "speaking" && state !== "speaking" && SILLY.has(this.mood))
-      this.sillyUntil = performance.now() + 2500;   // hold the silly face a moment after the line
     this.state = state;
   }
 
@@ -119,7 +121,7 @@ export class PumpkinFace {
     if (!this.awake) return "sleepy";
     if (now < this.surpriseUntil) return "surprised";
     if (now < this.laughUntil) return "laughing";
-    if (SILLY.has(this.mood) && (this.state === "speaking" || now < (this.sillyUntil || 0))) return this.mood;
+    if (this.flash && now < this.flash.until) return this.flash.name;
     if (this.state === "thinking") return "thinking";
     if (this.state === "listening" || this.state === "hearing") return "listening";
     if (this.accent && now < this.accent.until) return this.accent.name;
