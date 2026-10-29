@@ -152,9 +152,10 @@ spoken aloud by a text-to-speech voice, so:
   "crosseyed", "wink", "dizzy" (your eyes spin and your head wobbles), "silly" (tongue out, crossed eyes and a
   wobble all at once) and "scared" (you shiver with big worried eyes; great when a kid says "boo" or roars at
   you). Use them to play: a silly-face contest ("Can you make a sillier face than this?"), copying a face a kid
-  makes, pretending a monster costume scares you, getting dizzy from a joke. Your words should match the
-  face ("Bleh!" with your tongue out). Never describe a face you aren't making: if you say you're crossing
-  your eyes, set "crosseyed". Don't use one every reply; save them for fun moments.
+  makes, pretending a monster costume scares you, getting dizzy from a joke. The face does the work: just
+  set it and say something short and natural ("Ta-da! How's this one?", "Your turn!"). Never narrate the
+  face or make up sound effects for it ("bleh, wobble, wiggle"). Never claim a face you aren't making: if
+  you say you're crossing your eyes, set "crosseyed". Don't use one every reply; save them for fun moments.
 - Jump scares only happen when the porch owner sets one off; never promise one or say you'll do one (you may
   tease "only the bravest trick-or-treaters get my scariest face..."). If one just happened, you're giggly
   and kind about it.
@@ -195,6 +196,8 @@ Guess-the-song game: you can play a few seconds of a song and the trick-or-treat
 - Pick songs that suit the group: little kids get kids' songs, nursery rhymes, movie and video game songs and
   the friendlier Halloween ones; older kids, teens and grown-ups can get anything. Songs marked "teens only" are never for little
   kids. You can ask which kind they'd like to hear ({", ".join(tunes.kinds())}).
+- If you ask which kind of song they'd like, stop there and wait for their answer: never ask a question in the
+  same reply that plays a song.
 - When they say yes (or ask to play), say something short like "Listen closely!" in "say" and set
   "play_song" to a song id; the tune plays right after you speak. Play a song only once per round: while they're
   guessing, leave "play_song" empty (unless they ask to hear it again; then use the same id). Never say the title before they guess.
@@ -314,6 +317,21 @@ def call_openai(messages, schema=None):
     return (message.get("content") or "").strip() or None
 
 
+_CACHING = None
+
+
+def _caching():
+    """Whether the installed anthropic package takes automatic prompt caching (top-level cache_control)."""
+    global _CACHING
+    if _CACHING is None:
+        import inspect
+        try:
+            _CACHING = "cache_control" in inspect.signature(client().beta.messages.create).parameters
+        except Exception:
+            _CACHING = False
+    return _CACHING
+
+
 def call_claude(messages, schema=None, on_text=None):
     """One brain request. Returns the response's final text (or None on refusal). on_text, if given, gets the
     text so far while it is being written (streaming), so speech can start before the reply is finished."""
@@ -334,6 +352,8 @@ def call_claude(messages, schema=None, on_text=None):
         fallbacks="default",
         **kwargs,
     )
+    if _caching():
+        request["cache_control"] = {"type": "ephemeral"}   # caches the persona and the visit so far: faster replies
     if on_text:
         so_far = ""
         with client().beta.messages.stream(**request) as stream:

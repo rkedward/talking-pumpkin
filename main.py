@@ -282,7 +282,10 @@ class Pumpkin:
 
     def mood(self, name):
         """The feeling of a whole reply, chosen by the brain; the projected face shows it."""
-        self.hub.publish({"t": "mood", "name": name or "happy"})
+        name = name or "happy"
+        if name != "neutral":
+            self.log(f"🎭 {name}", "mood")
+        self.hub.publish({"t": "mood", "name": name})
 
     def _on_sentence(self, sentence):
         expr = self.props.expression_for(sentence)
