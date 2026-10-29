@@ -238,6 +238,7 @@ class Listener:
         pre_roll, voiced, chunks, silent, speech = [], [], [], 0, False
         burst, hits, clock = 0, [], 0.0   # knock: how long the current loud burst is; times of short bursts
         prev, refs, loudest, report, peak = self.noise, [], 0.0, 10.0, 0.0
+        flagged, flag_max = 0, 0.0        # frames the mic array called voice, and the loudest of them (log)
         recent = collections.deque(maxlen=330)   # ~10 s of frame levels: the room's floor is a low percentile
         while not should_stop():
             if not self.mic.ok or stt is None:
@@ -263,11 +264,12 @@ class Listener:
                 loudest = max(loudest, rms)
                 if clock >= report and self.log:
                     report = clock + 10
-                    self.log(f"(over the music: room noise {self.noise:.0f}, music echo {echo:.0f}, "
-                             f"loudest {loudest:.0f}; speech needs "
-                             f"{max(self.noise * float(self.cfg['start_ratio']), float(self.cfg['min_rms']), echo * margin):.0f})",
-                             "info")
-                    loudest = 0.0
+                    need = (max(self.noise * 1.8, 50.0) if voice else
+                            max(self.noise * float(self.cfg['start_ratio']), float(self.cfg['min_rms']), echo * margin))
+                    self.log(f"(over the music: room noise {self.noise:.0f}, music echo {echo:.0f}, loudest {loudest:.0f}; "
+                             f"speech needs {need:.0f}; voice light on {flagged * frame_s:.1f} s, loudest then "
+                             f"{flag_max:.0f})", "info")
+                    loudest, flagged, flag_max = 0.0, 0, 0.0
             else:
                 refs = []
             if knock:
@@ -289,16 +291,26 @@ class Listener:
                 elif sharp:
                     burst, peak = 1, rms
                 prev = rms
-            basic = max(self.noise * float(self.cfg["start_ratio"]), float(self.cfg["min_rms"]))
-            loud = rms > (basic if voice else max(basic, echo * margin))
+            if voice:
+                # The mic array says someone's talking: a low bar (its echo-cancelled channel turns voices down
+                # a lot while it plays music), and Silero VAD below throws out typing and clicks.
+                flag = voice()
+                basic = max(self.noise * 1.8, 50.0)
+                loud = rms > basic and flag
+                if flag:
+                    flagged, flag_max = flagged + 1, max(flag_max, rms)
+            else:
+                basic = max(self.noise * float(self.cfg["start_ratio"]), float(self.cfg["min_rms"]))
+                loud = rms > max(basic, echo * margin)
             if not speech:
                 pre_roll = (pre_roll + [frame])[-10:]
                 voiced = voiced + [frame] if loud else []
-                if len(voiced) >= 5 and (voice is None or voice()):   # knocks, clatter and typing aren't words
+                if len(voiced) >= 5:   # knocks, clatter and typing aren't words
                     speech, silent, chunks = True, 0, list(pre_roll)
             else:
                 chunks.append(frame)
-                silent = 0 if loud else silent + 1
+                # once someone's talking, keep going on level alone: the voice light flickers between words
+                silent = 0 if (rms > basic if voice else loud) else silent + 1
                 if len(chunks) * frame_s > 6:     # a long conversation going past, not a greeting
                     speech, pre_roll, voiced = False, [], []
                     continue
