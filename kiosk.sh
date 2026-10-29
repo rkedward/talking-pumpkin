@@ -13,7 +13,8 @@ URL="http://localhost:${PORT}"
 for _ in $(seq 60); do curl -s -o /dev/null "$URL/" && break; sleep 1; done
 BROWSER=$(command -v chromium || command -v chromium-browser)
 FLAGS=(--kiosk --noerrdialogs --disable-infobars --no-first-run --incognito --disable-session-crashed-bubble
-       --check-for-update-interval=31536000 --autoplay-policy=no-user-gesture-required)
+       --check-for-update-interval=31536000 --autoplay-policy=no-user-gesture-required
+       --password-store=basic)   # basic: no "choose password for new keyring" popup
 
 # Small DSI screen for the camera debug view: keep the HDMI projector(s) at the top left (the face opens at 0,0)
 # and put the DSI screen below the first one (beside it can push the desktop past the Pi's 4096-pixel limit
