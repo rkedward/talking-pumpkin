@@ -778,11 +778,12 @@ class Pumpkin:
 
         def is_wake(text):
             found = [m.group(0) for m in wake_re.finditer(text.lower())]
-            if self._idle_playing:   # the song leaking through doesn't count: what it's singing right now
+            if self._idle_playing and found:   # the song leaking through doesn't count: what it's singing now
                 near = self._lyrics_near()
-                found = [w for w in found if w not in near and "knock" not in w]
-                if not found and text:
+                kept = [w for w in found if w not in near and "knock" not in w]
+                if not kept:
                     self.log(f"(ignored, sounds like the song: {text!r})", "info")
+                found = kept
             return bool(found)
 
         while True:
