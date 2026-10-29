@@ -526,6 +526,7 @@ class Pumpkin:
                 if self.abort_visit:
                     break
                 if not heard:
+                    cut_off = None   # whoever talked over him didn't say anything after all
                     if forced and not self.sound and not self.present():
                         forced = False
                     continue

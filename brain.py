@@ -556,7 +556,7 @@ def chat(sid, text, on_stage=None, cut_off=None, on_say=None, on_mood=None, imag
         note += " (Since your last reply you also said: " + " ".join(f'"{t}"' for t in lines) + ")"
     if cut_off is not None:
         said = f'you had only said "{cut_off}"' if cut_off else "before you got a word out"
-        note += f" (They talked over your last reply, {said}. Answer what they said; don't repeat yourself.)"
+        note += f" (They talked over your last reply, {said}. Answer what they said; don't repeat yourself or apologise.)"
     if last:
         note += (" (This is your last reply of the visit: answer, then say a warm goodbye and remind them to take"
                  " candy. Don't ask a question or promise anything more.)")

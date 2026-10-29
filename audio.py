@@ -207,7 +207,23 @@ class Listener:
             limit = max(self.noise * float(cfg["start_ratio"]), float(cfg["min_rms"])) * ratio
             loud_flags = (loud_flags + [rms > max(limit, echo * margin)])[-window:]
             if sum(loud_flags) >= need and (self.voice_hint is None or self.voice_hint()):
-                self._carry = recent
+                # He finishes his sentence anyway, so there's time to make sure it's a voice: listen ~1 s more
+                # and ask Silero (a bump, a cough or a door creak isn't someone talking to him).
+                heard = list(recent)
+                while self._watching and len(heard) * frame_s < 1.0:
+                    try:
+                        heard.append(self.mic.frames.get(timeout=0.1))
+                    except queue.Empty:
+                        pass
+                if not self._watching:
+                    return
+                voice_ms = speech_ms(np.concatenate(heard).astype(np.float32) / 32768.0, self.mic.rate)
+                if voice_ms is not None and voice_ms < 300:
+                    loud_flags = []
+                    if self.log:
+                        self.log(f"(talked over? no: {voice_ms:.0f} ms of voice)", "info")
+                    continue
+                self._carry = heard
                 self.interrupted.set()
                 # He may finish his sentence first: keep their words coming in meanwhile for the next listen()
                 while self._watching and len(self._carry) < int(10 / frame_s):
@@ -422,6 +438,8 @@ def _clean_transcript(text):
     words = " ".join(re.findall(r"[a-z]+", text.lower()))
     if len(words.split()) >= 3 and f" {words} " in " " + " ".join(re.findall(r"[a-z]+", STT_PROMPT.lower())) + " ":
         return ""   # three or more words straight out of the prompt: an echo, not a kid
+    if re.fullmatch(r"\s*\w+\s*:\s*", text):
+        return ""   # a lone "context:" or "transcript:": the recognizer's formatting, not a kid
     if text.lower() in _HALLUCINATIONS or re.fullmatch(r"[\W_]*", text):
         return ""
     letters = re.findall(r"[^\W\d_]", text)
