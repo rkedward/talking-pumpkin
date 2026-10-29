@@ -77,6 +77,7 @@ DEFAULTS = {
         # cancellation keeps him from hearing himself. true also tries it with a separate speaker (kids then
         # have to talk louder than his echo); false = never.
         "barge_in": "auto",
+        "barge_in_finish": "sentence",   # talked over: finish the sentence he's on ("sentence") or stop at once ("now")
         "barge_min_s": 0.25,          # this much speech within barge_window_s counts as talking over him
         "barge_window_s": 0.4,
         "barge_ratio": 1.5,           # stricter than normal listening (start_ratio, min_rms) by this factor

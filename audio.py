@@ -209,6 +209,12 @@ class Listener:
             if sum(loud_flags) >= need and (self.voice_hint is None or self.voice_hint()):
                 self._carry = recent
                 self.interrupted.set()
+                # He may finish his sentence first: keep their words coming in meanwhile for the next listen()
+                while self._watching and len(self._carry) < int(10 / frame_s):
+                    try:
+                        self._carry.append(self.mic.frames.get(timeout=0.1))
+                    except queue.Empty:
+                        pass
                 return
 
     def _learn_echo(self, r):
@@ -879,18 +885,19 @@ class Speaker:
         if self.laughs:
             log(f"voice: {len(self.laughs)} recorded laughs")
 
-    def speak(self, text, on_level, on_sentence=None, should_stop=lambda: False):
+    def speak(self, text, on_level, on_sentence=None, should_stop=lambda: False, stop_after=lambda: False):
+        """should_stop cuts him off right away; stop_after lets him finish the sentence he's on first."""
         with Speaker._output_lock:
             self._start_mouth(on_level)
             try:
-                self._speak(text, on_level, on_sentence, should_stop)
+                self._speak(text, on_level, on_sentence, should_stop, stop_after)
             finally:
                 self._stop_mouth(cut=should_stop())
 
-    def _speak(self, text, on_level, on_sentence, should_stop):
+    def _speak(self, text, on_level, on_sentence, should_stop, stop_after=lambda: False):
         self.first_sound_at = None
         if not isinstance(text, str):          # sentences still arriving (a reply being streamed in)
-            return self._speak_source(iter(text), on_level, on_sentence, should_stop)
+            return self._speak_source(iter(text), on_level, on_sentence, should_stop, stop_after)
         sentences = _sentences(text)
         if not self.laughs and getattr(self.tts, "cloud", False):
             # Spoken on its own, "Ho ho ho!" gets read out as words; said right after the joke, the voice laughs.
@@ -901,14 +908,15 @@ class Speaker:
                 else:
                     merged.append(s)
             sentences = merged
-        return self._speak_source(iter(sentences), on_level, on_sentence, should_stop)
+        return self._speak_source(iter(sentences), on_level, on_sentence, should_stop, stop_after)
 
-    def _speak_source(self, source, on_level, on_sentence, should_stop):
+    def _speak_source(self, source, on_level, on_sentence, should_stop, stop_after=lambda: False):
         """Speak sentences from an iterator, which may still be producing them (a reply streaming in)."""
         ready = queue.Queue()
+        done = lambda: should_stop() or stop_after()   # checked between sentences
 
         def make(s):
-            if should_stop():
+            if done():
                 return s, None, None
             try:
                 if self.laughs and _is_laugh(s):
@@ -933,7 +941,7 @@ class Speaker:
                 # (they are played in order), so the next one is ready before the current one ends.
                 with ThreadPoolExecutor(max_workers=4) as pool:
                     for i, s in enumerate(source):
-                        if should_stop():
+                        if done():
                             break
                         if i == 0 and can_stream and not (self.laughs and _is_laugh(s)):
                             # The first sentence plays while it is still arriving, so he starts talking sooner.
@@ -954,11 +962,11 @@ class Speaker:
         try:
             while True:
                 item = ready.get()
-                if item is None or should_stop():
+                if item is None or done():
                     break
                 if hasattr(item, "result"):            # a sentence still being made
                     item = item.result()
-                    if should_stop():
+                    if done():
                         break
                 sentence, audio, rate = item
                 if on_sentence:

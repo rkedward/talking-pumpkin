@@ -272,8 +272,12 @@ class Pumpkin:
                 on_first_sound()
             threading.Thread(target=wait_first, daemon=True).start()
         try:
+            # finish_sentence: someone talking over him stops him at the end of the sentence he's on
+            cut = lambda: watch and self.listener.interrupted.is_set()
+            soft = str(self.cfg["mic"]["barge_in_finish"]).lower() != "now"
             self.speaker.speak(text, on_level=self._set_mouth, on_sentence=on_sentence,
-                               should_stop=lambda: self.abort_visit or (watch and self.listener.interrupted.is_set()))
+                               should_stop=lambda: self.abort_visit or (cut() and not soft),
+                               stop_after=lambda: soft and cut())
         finally:
             if watch:
                 self.listener.stop_watch()
