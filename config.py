@@ -47,6 +47,16 @@ DEFAULTS = {
         "game_extra_s": 60,           # ... and this much more time
         "listen_s": 8,                # how long to wait for each question
         "regreet_s": 12,
+        # What starts a visit: "sound" = someone says hello / trick or treat, knocks, rings the doorbell (or the
+        # remote's Greet); the camera only takes a picture for costumes and never tracks. "camera" = the old way:
+        # person detection starts the visit, the eyes follow people, and the visit ends when they walk away.
+        "trigger": "sound",
+        "wake_words": ["trick or treat", "treat", "hello", "hi", "hey", "happy halloween", "boo", "pumpkin",
+                       "knock knock", "anybody home", "anyone home"],
+        "knock": True,                # a knock on the door starts a visit too
+        "knock_ratio": 8.0,           # how far above the room's noise a knock must jump (higher = less sensitive)
+        "knocks": 2,                  # knocks within 1.5 s that count ("knock knock")
+        "quiet_end_s": 12,            # sound mode: this long with nobody talking = "are you still there?", then bye
     },
     "mic": {
         "device": "ReSpeaker",        # part of the input device name; falls back to the default mic

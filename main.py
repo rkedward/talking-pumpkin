@@ -10,6 +10,7 @@ import json
 import math
 import queue
 import random
+import re
 import socket
 import sys
 import threading
@@ -38,6 +39,8 @@ WRAPUPS = [
     "I'd love to chat all night, but more trick-or-treaters are coming. Grab some candy and have a spook-tacular Halloween! Ho ho ho!",
     "Okay, my candle's flickering! Take some candy, and happy Halloween! Hee hee!",
 ]
+NUDGES = ["Hello? Are you still there?", "Helloooo? Anybody still there?", "Did you sneak off with my candy? Are you still there?"]
+BYE_RE = re.compile(r"\b(bye|goodbye|see you|see ya|gotta go|got to go|we have to go)\b", re.I)
 GOODBYES = ["Bye bye! Happy Halloween! Ho ho ho!", "See you later, alligator! Happy haunting!", "Bye bye! Hee hee, that was fun!"]
 BUTLER_LINES = [
     "Ding dong! Visitors, sir! Allow me to get the lights.",
@@ -151,6 +154,18 @@ class Pumpkin:
         if stt is None:
             self.log("speech recognition off; type questions in the debug panel")
         self.listener = Listener(self.mic, cfg["mic"], stt)
+        # Sound-triggered visits: wake words are checked by the Pi's own whisper, so nothing leaves the porch
+        # before a visit starts.
+        self.local_stt = stt if getattr(stt, "local", False) else getattr(stt, "backup", None) or stt
+        self.sound = str(cfg["visit"]["trigger"]).lower() == "sound"
+        self.last_activity = time.time()
+        self._voice_seen = (None, 0.0)   # last direction a voice came from, and when
+        if self.sound:
+            self.vision.set_rates(0, 0)   # no tracking; the camera only looks when asked
+            self.log("visits start by sound: hello / trick or treat"
+                     + (", a knock" if cfg["visit"]["knock"] else "") + ", the doorbell or Greet; camera on demand"
+                     + ("" if getattr(self.local_stt, "local", False) else
+                        " (no local whisper: wake words go to the cloud speech-to-text)"))
         if cfg["stt"].get("pause_camera", True):   # give speech recognition the whole CPU
             self.listener.on_busy = self.vision.pause
         self.speaker = Speaker(make_tts(cfg["tts"], self.log), cfg["tts"], self.mic, self.log)
@@ -164,6 +179,7 @@ class Pumpkin:
                             {n: sc["where"] for n, sc in self.screens.items()}, self.show.online)
         else:
             brain.configure(cfg["claude"])
+        brain.set_look(self.sound)
         threading.Thread(target=self._face_loop, daemon=True, name="face").start()
 
     # ---- helpers -------------------------------------------------------------------------------
@@ -340,6 +356,12 @@ class Pumpkin:
                 self.show.active()   # sends the creature away once its time is up
             gaze, look_at = None, None
             voice = self.doa.bearing() if self.doa and self.doa.available and not self.speaking else None
+            if self.sound:   # no camera tracking: look where the last voice came from, for a while
+                if voice is not None:
+                    self._voice_seen = (voice, time.time())
+                elif self._voice_seen[0] is not None and time.time() - self._voice_seen[1] < 8:
+                    voice = self._voice_seen[0]
+                people, target = [], None
             if voice is not None:
                 near = min(people, key=lambda p: abs(self.vision.bearing(p) - voice), default=None)
                 if near and abs(self.vision.bearing(near) - voice) <= float(self.cfg["doa"]["match_deg"]):
@@ -380,15 +402,15 @@ class Pumpkin:
             self.show.speak(random.choice(BUTLER_LINES), should_stop=lambda: self.abort_visit)
         time.sleep(float(h["reveal_delay_s"]))
 
-    def visit(self, forced):
+    def visit(self, forced, trigger=None, said=None):
         self.visit_active = True
         try:
-            self._visit(forced)
+            self._visit(forced, trigger, said)
         finally:
             self.visit_active = False
             self.force_greet = False
 
-    def _visit(self, forced):
+    def _visit(self, forced, trigger=None, said=None):
         v = self.cfg["visit"]
         self.abort_visit = False
         self.summons = 0
@@ -405,15 +427,27 @@ class Pumpkin:
         self.props.expression("surprised")
         self.props.arrival()
         self.set_state("greeting")
-        people, _, _, _ = self.vision.state()
         result = {}
 
         def ask_claude():
             try:
+                if self.sound:   # no tracking: one fresh look now
+                    people = self.vision.look_now()
+                else:
+                    people, _, _, _ = self.vision.state()
                 on_stage = self.show.active() if self.show else None
                 note = (f"They rang the doorbell, and your butler {on_stage['name']} answered it and is still visible."
                         if doorbell and on_stage else "They rang the doorbell." if doorbell else "")
-                result.update(brain.greet(self.vision.snapshot_b64(), max(1, len(people)), note))
+                if self.sound:
+                    if trigger == "knock":
+                        note += " They knocked on the door."
+                    elif said:
+                        note += f' You heard them say: "{said}". Answer that too.'
+                    if not people:
+                        note += (" Nobody is in view of your eyes yet: greet them warmly, ask them to step right in"
+                                 " front of you so you can see their costumes, and set look to true.")
+                result.update(brain.greet(self.vision.snapshot_b64(), len(people) if self.sound else max(1, len(people)),
+                                          note))
             except Exception as exc:
                 self.log(f"claude error: {type(exc).__name__}: {exc}")
                 result.update({"session": "", "costumes": [], "say": brain.FALLBACK_SAY})
@@ -435,24 +469,50 @@ class Pumpkin:
         started, turns = time.time(), 0
         brain_thread = None
         max_turns, max_s, game_on = int(v["max_turns"]), float(v["max_visit_s"]), False
+        pending_look, looks, nudged = self.sound and result.get("look"), 0, False
+        self.last_activity = time.time()
         while not self.abort_visit:
-            if not forced and not self.present():
+            if self.sound:   # nobody to watch walk away: a quiet spell ends the visit (after one nudge)
+                quiet = time.time() - self.last_activity
+                if quiet >= float(v["quiet_end_s"]) and not pending_look:
+                    if nudged:
+                        self.say(random.choice(GOODBYES))
+                        break
+                    nudged = True
+                    self.say(random.choice(NUDGES), interruptible=True)
+                    self.last_activity = time.time() - float(v["quiet_end_s"]) / 2   # half as long to answer
+                    continue
+            elif not forced and not self.present():
                 self.say(random.choice(GOODBYES))
                 break
             if turns >= max_turns or time.time() - started > max_s:
                 self.say(random.choice(WRAPUPS))
                 break
-            self.set_state("listening")
-            heard = self.listener.listen(float(v["listen_s"]), self.typed, lambda: self.abort_visit,
-                                         on_speech=lambda: self.set_state("hearing"))
-            if self.abort_visit:
-                break
-            if not heard:
-                if forced and not self.present():
-                    forced = False
-                continue
-            self.log(f"👂 {heard}", "heard")
-            heard_at, timing, self.listener.timing = time.time(), self.listener.timing, {}
+            image, seen = None, 0
+            if pending_look and looks < 2:   # he asked them to step into view: take a fresh look
+                pending_look, looks = False, looks + 1
+                self.set_state("thinking")
+                seen, image = self.look_for_people()
+                heard, timing = None, {}
+                self.log(f"👀 looked: {seen} in view", "info")
+            else:
+                pending_look = False
+                self.set_state("listening")
+                wait = float(v["listen_s"])
+                if self.sound:
+                    wait = max(1.0, min(wait, float(v["quiet_end_s"]) - (time.time() - self.last_activity)))
+                heard = self.listener.listen(wait, self.typed, lambda: self.abort_visit,
+                                             on_speech=self._heard_voice)
+                if self.abort_visit:
+                    break
+                if not heard:
+                    if forced and not self.sound and not self.present():
+                        forced = False
+                    continue
+                nudged = False
+                self.log(f"👂 {heard}", "heard")
+                timing, self.listener.timing = self.listener.timing, {}
+            heard_at = time.time()
             self.set_state("thinking")
             on_stage = self.show.active() if self.show else None
             if brain_thread:                      # an interrupted reply still finishing (it updates the history)
@@ -460,11 +520,12 @@ class Pumpkin:
             # The reply streams in: he starts saying its first sentence while Claude is still writing the rest.
             sentences, reply = queue.Queue(), {}
 
-            def think(heard=heard, cut_off=cut_off, on_stage=on_stage):
+            def think(heard=heard, cut_off=cut_off, on_stage=on_stage, image=image, seen=seen):
                 try:
                     reply.update(brain.chat(session, heard,
                                             f"{on_stage['name']} (in {self.show.screen})" if on_stage else None,
-                                            cut_off=cut_off, on_say=sentences.put, on_mood=self.mood))
+                                            cut_off=cut_off, on_say=sentences.put, on_mood=self.mood,
+                                            image_b64=image, people=seen))
                 except Exception as exc:
                     self.log(f"claude error: {type(exc).__name__}: {exc}")
                     reply.update({"say": "Ooh, my pumpkin brain went fuzzy. Happy Halloween!"})
@@ -485,10 +546,14 @@ class Pumpkin:
             brain_s = time.time() - heard_at
             cut_off = self.say(text, interruptible=True,
                                on_first_sound=lambda: self._log_timing(timing, brain_s, heard_at))
+            self.last_activity = time.time()
             if cut_off is not None:   # they talked over him: skip the rest and hear them out
                 turns += 1
                 continue
             brain_thread.join(timeout=10)
+            pending_look = self.sound and reply.get("look")
+            if self.sound and heard and BYE_RE.search(heard):   # they said goodbye, and he said it back
+                break
             self.sideshow(reply)
             if reply.get("play_song") and not self.abort_visit:
                 if not game_on:   # a game takes a few more turns than a chat
@@ -509,6 +574,8 @@ class Pumpkin:
         self.props.expression("neutral")
 
     def run(self):
+        if self.sound:
+            return self._run_sound()
         last_visit_end = -1e9
         while True:
             self.awake = False
@@ -532,6 +599,46 @@ class Pumpkin:
             last_visit_end = time.time()
             self.set_state("cooldown")
             time.sleep(2.5)
+
+    def _run_sound(self):
+        """Sound-triggered visits: wait for a "trick or treat" / hello, a knock, the doorbell or the remote."""
+        v = self.cfg["visit"]
+        words = [w.lower() for w in v["wake_words"]]
+        wake_re = re.compile(r"\b(" + "|".join(re.escape(w).replace(r"\ ", r"[\s,.-]*") for w in words) + r")\b")
+
+        def is_wake(text):
+            return bool(wake_re.search(text.lower()))
+
+        while True:
+            self.awake = False
+            self.set_state("idle")
+            got = self.listener.wait_for_visitor(lambda: self.force_greet or not self.typed.empty(), is_wake,
+                                                 stt=self.local_stt, knock=bool(v["knock"]),
+                                                 knock_ratio=float(v["knock_ratio"]), knocks=int(v["knocks"]))
+            trigger, said = got if got else ("remote", None)
+            if trigger == "remote" and not self.force_greet and not self.typed.empty():
+                trigger, said = "words", self.typed.get_nowait()
+            self.log({"words": f"🔔 heard \"{said}\"", "knock": "🔔 knock knock",
+                      "remote": "🔔 greet"}[trigger], "info")
+            self.force_greet = False
+            self.visit(True, trigger, said)
+            self.set_state("cooldown")
+            time.sleep(2.5)
+
+    def _heard_voice(self):
+        self.last_activity = time.time()
+        self.set_state("hearing")
+
+    def look_for_people(self, wait_s=5.0):
+        """A fresh look after he asked them to step into view: up to wait_s for someone to appear. Returns
+        (people seen, jpeg base64)."""
+        time.sleep(1.0)                      # give them a moment to move
+        end = time.time() + wait_s
+        people = self.vision.look_now()
+        while not people and time.time() < end and not self.abort_visit:
+            time.sleep(0.4)
+            people = self.vision.look_now()
+        return len(people), self.vision.snapshot_b64()
 
     # ---- web interface -------------------------------------------------------------------------
     def face_demo(self):

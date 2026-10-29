@@ -23,6 +23,7 @@ GAME = True              # [claude] song_game: offer the "guess the song" game
 PROVIDER = "claude"      # claude | openai
 OPENAI_MODEL = "gpt-5-mini"
 OPENAI_REASONING = "minimal"
+LOOK = False            # sound-triggered visits: the camera only looks when asked ("look" in the reply)
 CREATURES = []          # [{"name": ..., "description": ..., "windows": [...]}] that can appear in a window
 WINDOWS = {}            # window name -> where it is, as the pumpkin tells kids ("the front door window behind you")
 ONLINE = lambda: list(WINDOWS)   # windows whose projector is switched on right now
@@ -41,6 +42,12 @@ def configure(cfg, creatures=(), windows=None, online=None):
     OPENAI_MODEL, OPENAI_REASONING = cfg.get("openai_model", OPENAI_MODEL), cfg.get("openai_reasoning", "")
     CREATURES, WINDOWS = list(creatures), dict(windows or {})
     ONLINE = online or (lambda: list(WINDOWS))
+
+
+def set_look(on):
+    """Sound-triggered visits: the camera doesn't watch; the brain asks for a look when it wants one."""
+    global LOOK
+    LOOK = bool(on)
 
 
 def _live():
@@ -102,6 +109,11 @@ def output_schema(with_costumes):
                       "description": "The feeling your face shows while you say it."},
              "say": {"type": "string", "description": "Exactly what the pumpkin says aloud."}}
     required = ["mood", "say"]
+    if LOOK:
+        props["look"] = {"type": "boolean",
+                         "description": "true to take a fresh look with your eyes right after you speak, e.g. "
+                                        "when you've asked them to step in front of you so you can see them."}
+        required.append("look")
     if GAME and not with_costumes:
         props["play_song"] = {"type": "string", "enum": [""] + list(tunes.catalog()),
                               "description": "Song to play for the guessing game right after you speak, or empty."}
@@ -210,9 +222,18 @@ Songs you can play, by kind:
 {songs}"""
 
 
+LOOK_PROMPT = """
+
+Your eyes: you notice visitors by hearing them (a "trick or treat", a knock, the doorbell). You only see them
+when you take a look: one when they arrive, and another whenever you set "look" to true. If you couldn't see
+anyone, or a costume was hidden or blurry, ask them to step right in front of you ("Come closer, let me see that
+costume!") and set "look" to true; you'll get a fresh look right after you speak. Don't ask more than twice
+in a visit; if you still can't see them, just ask what they're dressed as."""
+
+
 def persona():
     laugh = LAUGH_ON.replace("{laugh_text}", LAUGH_TEXT) if LAUGH else LAUGH_OFF
-    return PERSONA.replace("{laugh}", laugh) + sideshow_prompt() + game_prompt()
+    return PERSONA.replace("{laugh}", laugh) + sideshow_prompt() + game_prompt() + (LOOK_PROMPT if LOOK else "")
 
 
 def _no_laughs(text):
@@ -421,7 +442,8 @@ def greet(image_b64, people, note=""):
     say = _no_laughs(data.get("say") or FALLBACK_SAY)
     audience = "teens" if data.get("audience") == "teens" else "kids"
     mood = data.get("mood") if data.get("mood") in MOODS else "happy"
-    result = {"costumes": costumes, "audience": audience, "say": say, "mood": mood, **_sideshow_fields(data)}
+    result = {"costumes": costumes, "audience": audience, "say": say, "mood": mood, "look": bool(data.get("look")),
+              **_sideshow_fields(data)}
 
     # Keep a text-only history; the image isn't re-sent on every question.
     seen = ", ".join(costumes) if costumes else "costumes you couldn't make out"
@@ -496,7 +518,7 @@ def note_said(sid, text):
             session.setdefault("puppet", []).append(text)
 
 
-def chat(sid, text, on_stage=None, cut_off=None, on_say=None, on_mood=None):
+def chat(sid, text, on_stage=None, cut_off=None, on_say=None, on_mood=None, image_b64=None, people=0):
     """on_stage: name of the creature currently visible in the window, if any. cut_off: they talked over
     your last reply; this is the part of it you got to say."""
     with _lock:
@@ -519,20 +541,32 @@ def chat(sid, text, on_stage=None, cut_off=None, on_say=None, on_mood=None):
     if cut_off is not None:
         said = f'you had only said "{cut_off}"' if cut_off else "before you got a word out"
         note += f" (They talked over your last reply, {said}. Answer what they said; don't repeat yourself.)"
-    history = session["history"] + [{"role": "user", "content": f'The trick-or-treater says: "{text}"{note}'}]
+    if text is None:   # no words: the fresh look he asked for
+        said = (f"(You take a fresh look: {people} {'person' if people == 1 else 'people'} in view. React to what "
+                "you see now: compliment the costumes you can make out, or if you still can't see anyone, say so "
+                "playfully.)" + note)
+    else:
+        said = f'The trick-or-treater says: "{text}"{note}'
+    history = session["history"] + [{"role": "user", "content": said}]
+    request = history
+    if image_b64:   # the picture goes with this one request; the history keeps the words
+        request = history[:-1] + [{"role": "user", "content": [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": image_b64}},
+            {"type": "text", "text": said}]}]
     if FAKE:
         data = {"say": random.choice(FAKE_ANSWERS)}
         if on_stage:
             data["creature_says"] = "Ooooh, I agree with the pumpkin!"
     else:
-        data = _parse(call_claude(history, schema=output_schema(False),
+        data = _parse(call_claude(request, schema=output_schema(False),
                                   on_text=_SayStreamer(on_say, on_mood) if on_say else None))
     song = data.get("play_song") if data.get("play_song") in tunes.catalog() else ""
-    if song and session.get("song") and (song != session["song"] or "again" not in text.lower()):
+    if song and session.get("song") and (song != session["song"] or "again" not in (text or "").lower()):
         song = ""   # one song per visit; replay it only if they ask to hear it again
     if song:
         session["song"] = song
-    result = {"mood": data.get("mood") if data.get("mood") in MOODS else "happy", "play_song": song, "say": _no_laughs(data.get("say")) or "Ooh, let's talk about something else. Like candy! Have you picked one yet?",
+    result = {"mood": data.get("mood") if data.get("mood") in MOODS else "happy", "play_song": song,
+              "look": bool(data.get("look")), "say": _no_laughs(data.get("say")) or "Ooh, let's talk about something else. Like candy! Have you picked one yet?",
               **_sideshow_fields(data)}
     with _lock:
         session["history"] = history + [{"role": "assistant", "content": json.dumps(result)}]

@@ -185,6 +185,70 @@ class Listener:
             self.echo_gain += (r - self.echo_gain) * (0.15 if r < self.echo_gain else 0.01)
         self._echo_frames += 1
 
+    # ---- waiting for a visitor (sound-triggered visits) -------------------------------------------------
+    def wait_for_visitor(self, should_stop, is_wake, stt=None, knock=True, knock_ratio=8.0, knocks=2):
+        """Between visits: listen for a short greeting ("trick or treat", "hello") or a knock on the door.
+        Short voiced bursts are transcribed with `stt` (the Pi's own whisper, so nothing leaves the porch
+        before a visit) and checked with is_wake(text). Returns ("words", text), ("knock", None), or None
+        when should_stop() says so."""
+        stt = stt or self.stt
+        frame_s = Microphone.FRAME_S
+        self.mic.flush()
+        pre_roll, voiced, chunks, silent, speech = [], [], [], 0, False
+        burst, hits, clock = 0, [], 0.0   # knock: how long the current loud burst is; times of short bursts
+        prev = self.noise
+        while not should_stop():
+            if not self.mic.ok or stt is None:
+                time.sleep(0.1)
+                continue
+            try:
+                frame = self.mic.frames.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            rms = float(np.sqrt(np.mean(frame.astype(np.float32) ** 2)))
+            clock += frame_s               # audio time (frames can arrive in bursts)
+            now = clock
+            if knock:
+                # A knock is a sharp, short thump: a jump far above the room noise that's over in <= 90 ms.
+                sharp = rms > max(self.noise * knock_ratio, float(self.cfg["min_rms"]) * 3) and rms > prev * 3
+                if burst:
+                    if rms > max(self.noise * knock_ratio * 0.4, float(self.cfg["min_rms"])):
+                        burst += 1
+                    else:
+                        if burst <= 3:
+                            hits = [t for t in hits if now - t < 1.5] + [now]
+                            if len(hits) >= knocks and hits[-1] - hits[0] >= 0.12:
+                                return ("knock", None)
+                        burst = 0
+                elif sharp:
+                    burst = 1
+                prev = rms
+            loud = rms > max(self.noise * float(self.cfg["start_ratio"]), float(self.cfg["min_rms"]))
+            if not speech:
+                pre_roll = (pre_roll + [frame])[-10:]
+                voiced = voiced + [frame] if loud else []
+                if not loud:
+                    self.noise = 0.95 * self.noise + 0.05 * rms
+                if len(voiced) >= 5:   # a bit longer than normal listening: knocks and clatter aren't words
+                    speech, silent, chunks = True, 0, list(pre_roll)
+            else:
+                chunks.append(frame)
+                silent = 0 if loud else silent + 1
+                if len(chunks) * frame_s > 6:     # a long conversation going past, not a greeting
+                    speech, pre_roll, voiced = False, [], []
+                    continue
+                if silent * frame_s >= float(self.cfg["silence_end_s"]):
+                    audio = np.concatenate(chunks).astype(np.float32) / 32768.0
+                    speech, pre_roll, voiced = False, [], []
+                    try:
+                        text = stt.transcribe(audio, self.mic.rate)
+                    except Exception:
+                        text = ""
+                    self.mic.flush()   # what came in while transcribing is stale
+                    if text and is_wake(text):
+                        return ("words", text)
+        return None
+
     # ---- one utterance ------------------------------------------------------------------------------
     def listen(self, timeout_s, typed, should_stop, on_speech=None):
         """Returns heard text, a typed question, or None after timeout_s of nobody speaking."""

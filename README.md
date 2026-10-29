@@ -106,6 +106,22 @@ tries barge-in with a separate speaker as well, but then kids have to be clearly
 `false` turns it off. If he stops for noises that aren't speech, raise `barge_ratio` (1.5) or `barge_min_s`
 (0.25); if kids have to shout, lower them.
 
+### 1f. How a visit starts and ends
+
+By default he listens instead of watching (`[visit] trigger = "sound"`):
+
+- **A visit starts** when someone says "trick or treat", "hello", "happy Halloween" and the like, knocks twice, rings
+  the doorbell (see the add-on) or you press Greet. The wake words are checked by whisper on the Pi, so nothing goes
+  to the cloud until a visit starts. Tune knocks with `knock_ratio` (higher = less sensitive).
+- **The camera only looks when he wants to see**: one picture when they arrive, for costumes. If nobody is in view
+  he asks them to step in front of him and takes another look. It never tracks people, so the Pi stays nearly idle.
+- **His eyes** follow whoever is talking, from the mic array's direction.
+- **A visit ends** after `quiet_end_s` (12 s) of nobody talking (he asks "are you still there?" first), when they
+  say bye, or at `max_turns` / `max_visit_s`.
+
+`trigger = "camera"` brings back the old way: person detection starts the visit, the eyes follow people, and the
+visit ends when they walk away.
+
 ## Add-ons
 
 ### Add-on: Window side show
@@ -291,6 +307,7 @@ The most useful ones:
 | `[camera] hfov_deg` | 66 | Camera's horizontal field of view (Camera Module 3 Wide: 102). Used to match voices to people. |
 | `[detector] min_height` | 0.25 | Smallest person (fraction of frame height) that counts as a visitor. |
 | `[visit] max_turns`, `max_visit_s` | 5, 90 | Wrap up so the line keeps moving. |
+| `[visit] trigger` | `sound` | `sound`: words, a knock, the doorbell or Greet start a visit; `camera`: person detection does. |
 | `[stt] model` | `base.en` | `tiny.en` is faster, `small.en` more accurate (slower on the Pi). |
 | `[stt] engine` | `whisper` | `openai` sends speech to OpenAI (needs `OPENAI_API_KEY`): about 0.5 s faster and much better with kids' voices, at well under a cent a visit. Whisper on the Pi takes over if the internet drops. Visitors' voices leave the porch, so a small sign is a nice touch. |
 | `[tts] engine` | `piper` | `openai` or `elevenlabs` for natural cloud voices, `espeak` for a robotic fallback. |

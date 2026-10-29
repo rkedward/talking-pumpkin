@@ -208,6 +208,7 @@ class Vision:
         self.last_frame = None
         self.detect_ms = 0.0
         self._lock = threading.Lock()
+        self._detect_lock = threading.Lock()   # the detector is not thread-safe (look_now runs it too)
         self.paused = False
         # The detector is made on its own thread, so its worker threads get that thread's lower priority.
         self._ready = threading.Event()
@@ -233,6 +234,28 @@ class Vision:
         """During a conversation the voice comes first: detect less often (the eyes still follow)."""
         self.fps = self.visit_fps if on else self.idle_fps
 
+    def set_rates(self, idle_fps, visit_fps):
+        """How often to look for people between visits and during one; 0 = not at all (look_now still works)."""
+        self.idle_fps, self.visit_fps = float(idle_fps), float(visit_fps)
+        self.fps = self.idle_fps
+
+    def look_now(self):
+        """Detect people in a fresh camera frame right now (the costume snapshot when tracking is off).
+        Returns the people found."""
+        frame, _ = self.camera.read()
+        if frame is None or self.detector is None:
+            return []
+        with self._detect_lock:
+            people = self.detector.detect(frame)
+        now = time.time()
+        with self._lock:
+            self.last_frame, self.people = frame, people
+            if people:
+                self.first_seen = self.first_seen if now - self.last_seen < 1.0 else now
+                self.last_seen = now
+                self.target = self._pick_target(people, now)
+        return people
+
     def _loop(self):
         last_id = -1
         try:   # Linux: per-thread priority; the detector's worker threads started from here inherit it
@@ -247,9 +270,9 @@ class Vision:
         finally:
             self._ready.set()
         while True:
-            if self.paused:
+            if self.paused or self.fps <= 0:
                 with self._lock:
-                    if self.people:
+                    if self.paused and self.people:   # (a pause is brief; whoever was there still is)
                         self.last_seen = time.time()
                 time.sleep(0.02)
                 continue
@@ -259,7 +282,8 @@ class Vision:
                 time.sleep(0.02)
                 continue
             last_id = fid
-            people = self.detector.detect(frame)
+            with self._detect_lock:
+                people = self.detector.detect(frame)
             self.detect_ms = (time.time() - started) * 1000
             now = time.time()
             with self._lock:
@@ -324,6 +348,9 @@ class Vision:
         """Camera view with boxes (orange = who the pumpkin is looking at), mirrored like a selfie view."""
         with self._lock:
             frame, people, target = self.last_frame, list(self.people), self.target
+        if self.fps <= 0 or self.paused:   # not detecting: show the live picture (boxes from the last look)
+            live, _ = self.camera.read()
+            frame = live if live is not None else frame
         if frame is None:
             return None
         img = frame.copy()
