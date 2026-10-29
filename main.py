@@ -93,6 +93,7 @@ class Pumpkin:
         self.force_greet = False
         self.typed = queue.Queue()
         self._scaring = False
+        self.visit_active = False
         self.history = collections.deque(maxlen=400)   # recent log lines, for the remote control (mcp_server.py)
         self.visit_session = ""
         self._scaring = False
@@ -380,6 +381,14 @@ class Pumpkin:
         time.sleep(float(h["reveal_delay_s"]))
 
     def visit(self, forced):
+        self.visit_active = True
+        try:
+            self._visit(forced)
+        finally:
+            self.visit_active = False
+            self.force_greet = False
+
+    def _visit(self, forced):
         v = self.cfg["visit"]
         self.abort_visit = False
         self.summons = 0
@@ -699,6 +708,9 @@ class Pumpkin:
         elif name == "faces":
             threading.Thread(target=self.face_demo, daemon=True).start()
         elif name == "greet":
+            if self.visit_active:   # otherwise it waits and starts a second greeting as soon as this visit ends
+                self.log("manual greet (already in a visit)")
+                return {"ok": True, "note": "already in a visit"}
             self.force_greet = True
             self.log("manual greet")
         elif name == "end":
