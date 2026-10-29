@@ -296,7 +296,8 @@ class Vision:
                     self.target = self._pick_target(people, now)
                 else:
                     self.target = None
-            time.sleep(max(0.0, 1 / self.fps - (time.time() - started)))
+            fps = self.fps   # (may drop to 0 at any moment: sound mode)
+            time.sleep(max(0.0, 1 / fps - (time.time() - started)) if fps > 0 else 0.2)
 
     def _pick_target(self, people, now):
         if self.preferred_bearing is not None and now < self.preferred_until:
