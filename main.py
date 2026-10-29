@@ -180,7 +180,8 @@ class Pumpkin:
         the part he got out (their words go to the next listen()); otherwise returns None."""
         if not text:
             return None
-        self.log(f"🎃 {text}", "said")
+        if isinstance(text, str):         # (a streamed reply is logged once it is complete)
+            self.log(f"🎃 {text}", "said")
         before = self.state
         self.set_state("speaking")
         self.speaking = True
@@ -378,6 +379,7 @@ class Pumpkin:
             self.sideshow(result)
 
         started, turns = time.time(), 0
+        brain_thread = None
         max_turns, max_s, game_on = int(v["max_turns"]), float(v["max_visit_s"]), False
         while not self.abort_visit:
             if not forced and not self.present():
@@ -399,18 +401,42 @@ class Pumpkin:
             heard_at, timing, self.listener.timing = time.time(), self.listener.timing, {}
             self.set_state("thinking")
             on_stage = self.show.active() if self.show else None
-            try:
-                reply = brain.chat(session, heard, f"{on_stage['name']} (in {self.show.screen})" if on_stage else None,
-                                   cut_off=cut_off)
-            except Exception as exc:
-                self.log(f"claude error: {type(exc).__name__}: {exc}")
-                reply = {"say": "Ooh, my pumpkin brain went fuzzy. Happy Halloween!"}
-            self.mood(reply.get("mood"))
+            if brain_thread:                      # an interrupted reply still finishing (it updates the history)
+                brain_thread.join(timeout=10)
+            # The reply streams in: he starts saying its first sentence while Claude is still writing the rest.
+            sentences, reply = queue.Queue(), {}
+
+            def think(heard=heard, cut_off=cut_off, on_stage=on_stage):
+                try:
+                    reply.update(brain.chat(session, heard,
+                                            f"{on_stage['name']} (in {self.show.screen})" if on_stage else None,
+                                            cut_off=cut_off, on_say=sentences.put, on_mood=self.mood))
+                except Exception as exc:
+                    self.log(f"claude error: {type(exc).__name__}: {exc}")
+                    reply.update({"say": "Ooh, my pumpkin brain went fuzzy. Happy Halloween!"})
+                finally:
+                    sentences.put(None)
+
+            brain_thread = threading.Thread(target=think, daemon=True, name="brain")
+            brain_thread.start()
+            first = sentences.get()
+            if first is None:                     # nothing streamed (fake mode, OpenAI brain, an error)
+                self.mood(reply.get("mood"))
+                text = reply.get("say")
+            else:
+                def text_stream(first=first):
+                    yield first
+                    yield from iter(sentences.get, None)
+                text = text_stream()
             brain_s = time.time() - heard_at
-            cut_off = self.say(reply["say"], interruptible=True, on_first_sound=lambda: self._log_timing(timing, brain_s, heard_at))
+            cut_off = self.say(text, interruptible=True,
+                               on_first_sound=lambda: self._log_timing(timing, brain_s, heard_at))
             if cut_off is not None:   # they talked over him: skip the rest and hear them out
                 turns += 1
                 continue
+            brain_thread.join(timeout=10)
+            if first is not None:
+                self.log(f"🎃 {reply.get('say', '')}", "said")
             self.sideshow(reply)
             if reply.get("play_song") and not self.abort_visit:
                 if not game_on:   # a game takes a few more turns than a chat

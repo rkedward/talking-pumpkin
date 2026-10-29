@@ -96,10 +96,11 @@ MOODS = ["happy", "excited", "surprised", "curious", "thinking", "sly", "sad", "
 
 
 def output_schema(with_costumes):
-    props = {"say": {"type": "string", "description": "Exactly what the pumpkin says aloud."},
-             "mood": {"type": "string", "enum": MOODS,
-                      "description": "The feeling your face shows while you say it."}}
-    required = ["say", "mood"]
+    # mood before say: replies are spoken while they stream in, and the face should be ready first
+    props = {"mood": {"type": "string", "enum": MOODS,
+                      "description": "The feeling your face shows while you say it."},
+             "say": {"type": "string", "description": "Exactly what the pumpkin says aloud."}}
+    required = ["mood", "say"]
     if GAME and not with_costumes:
         props["play_song"] = {"type": "string", "enum": [""] + list(tunes.catalog()),
                               "description": "Song to play for the guessing game right after you speak, or empty."}
@@ -300,8 +301,9 @@ def call_openai(messages, schema=None):
     return (message.get("content") or "").strip() or None
 
 
-def call_claude(messages, schema=None):
-    """One brain request. Returns the response's final text (or None on refusal)."""
+def call_claude(messages, schema=None, on_text=None):
+    """One brain request. Returns the response's final text (or None on refusal). on_text, if given, gets the
+    text so far while it is being written (streaming), so speech can start before the reply is finished."""
     if PROVIDER == "openai":
         return call_openai(messages, schema)
     kwargs = {}
@@ -309,7 +311,7 @@ def call_claude(messages, schema=None):
         kwargs["output_config"] = {"effort": EFFORT, "format": {"type": "json_schema", "schema": schema}}
     else:
         kwargs["output_config"] = {"effort": EFFORT}
-    response = client().beta.messages.create(
+    request = dict(
         model=MODEL,
         max_tokens=2000,
         system=persona(),
@@ -319,6 +321,15 @@ def call_claude(messages, schema=None):
         fallbacks="default",
         **kwargs,
     )
+    if on_text:
+        so_far = ""
+        with client().beta.messages.stream(**request) as stream:
+            for text in stream.text_stream:
+                so_far += text
+                on_text(so_far)
+            response = stream.get_final_message()
+    else:
+        response = client().beta.messages.create(**request)
     if response.stop_reason == "refusal":
         return None
     texts = [b.text for b in response.content if b.type == "text"]
@@ -391,7 +402,60 @@ def greet(image_b64, people, note=""):
     return {"session": sid, **result}
 
 
-def chat(sid, text, on_stage=None, cut_off=None):
+def _partial_say(text):
+    """The "say" value of a JSON reply that is still being written: (text so far, finished?)."""
+    m = re.search(r'"say"\s*:\s*"', text)
+    if not m:
+        return "", False
+    raw, i, escaped = [], m.end(), False
+    while i < len(text):
+        c = text[i]
+        if escaped:
+            escaped = False
+        elif c == "\\":
+            escaped = True
+        elif c == '"':
+            break
+        raw.append(c)
+        i += 1
+    done = i < len(text)
+    body = "".join(raw)
+    if not done and escaped:
+        body = body[:-1]                       # half an escape sequence
+    try:
+        return json.loads('"' + body + '"'), done
+    except json.JSONDecodeError:
+        return json.loads('"' + re.sub(r"\\u[0-9a-fA-F]{0,3}$", "", body) + '"') if body else "", done
+
+
+class _SayStreamer:
+    """Hands each finished sentence of "say" to a callback while the reply is still arriving."""
+
+    def __init__(self, on_sentence, on_mood=None):
+        self.on_sentence, self.on_mood, self.sent = on_sentence, on_mood, 0
+
+    def __call__(self, so_far):
+        if self.on_mood:
+            m = re.search(r'"mood"\s*:\s*"(\w+)"', so_far)
+            if m:
+                if m.group(1) in MOODS:
+                    self.on_mood(m.group(1))
+                self.on_mood = None
+        say, done = _partial_say(so_far)
+        # sentence ends followed by a space (or the end of a finished string)
+        ends = [m.end() for m in re.finditer(r"[.!?]+[\"')\]]*(?=\s)", say)]
+        if done:
+            ends.append(len(say))
+        for end in ends:
+            if end > self.sent:
+                piece = say[self.sent:end].strip()
+                self.sent = end
+                piece = _no_laughs(piece) if piece and not (not LAUGH and LAUGH_RE.match(piece)) else ""
+                if piece:
+                    self.on_sentence(piece)
+
+
+def chat(sid, text, on_stage=None, cut_off=None, on_say=None, on_mood=None):
     """on_stage: name of the creature currently visible in the window, if any. cut_off: they talked over
     your last reply; this is the part of it you got to say."""
     with _lock:
@@ -416,7 +480,8 @@ def chat(sid, text, on_stage=None, cut_off=None):
         if on_stage:
             data["creature_says"] = "Ooooh, I agree with the pumpkin!"
     else:
-        data = _parse(call_claude(history, schema=output_schema(False)))
+        data = _parse(call_claude(history, schema=output_schema(False),
+                                  on_text=_SayStreamer(on_say, on_mood) if on_say else None))
     song = data.get("play_song") if data.get("play_song") in tunes.catalog() else ""
     if song and session.get("song") and (song != session["song"] or "again" not in text.lower()):
         song = ""   # one song per visit; replay it only if they ask to hear it again

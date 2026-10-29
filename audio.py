@@ -647,6 +647,8 @@ class Speaker:
 
     def _speak(self, text, on_level, on_sentence, should_stop):
         self.first_sound_at = None
+        if not isinstance(text, str):          # sentences still arriving (a reply being streamed in)
+            return self._speak_source(iter(text), on_level, on_sentence, should_stop)
         sentences = _sentences(text)
         if not self.laughs and getattr(self.tts, "cloud", False):
             # Spoken on its own, "Ho ho ho!" gets read out as words; said right after the joke, the voice laughs.
@@ -657,6 +659,10 @@ class Speaker:
                 else:
                     merged.append(s)
             sentences = merged
+        return self._speak_source(iter(sentences), on_level, on_sentence, should_stop)
+
+    def _speak_source(self, source, on_level, on_sentence, should_stop):
+        """Speak sentences from an iterator, which may still be producing them (a reply streaming in)."""
         ready = queue.Queue()
 
         def make(s):
@@ -678,25 +684,25 @@ class Speaker:
             return s, audio, rate
 
         def producer():
-            if getattr(self.tts, "cloud", False):
-                rest = sentences
-                if self.stream_first and hasattr(getattr(self.tts, "main", self.tts), "stream") and sentences and \
-                        not (self.laughs and _is_laugh(sentences[0])):
-                    # The first sentence plays while it is still arriving, so he starts talking sooner.
-                    s0 = sentences[0]
-                    pause = self.question_pause if s0.rstrip().endswith("?") else self.pause
-                    ready.put((s0, _Streamed(self.tts, s0, pause), getattr(self.tts, "rate", None) or 24000))
-                    rest = sentences[1:]
-                # Cloud voices take a second or more per request: ask for every sentence at once (in order), so
-                # the next one is ready before the current one ends instead of leaving a gap.
+            cloud = getattr(self.tts, "cloud", False)
+            can_stream = cloud and self.stream_first and hasattr(getattr(self.tts, "main", self.tts), "stream")
+            try:
+                # Cloud voices take a second or more per request: ask for each sentence as soon as it is known
+                # (they are played in order), so the next one is ready before the current one ends.
                 with ThreadPoolExecutor(max_workers=4) as pool:
-                    for item in pool.map(make, rest):
-                        ready.put(item)
-            else:
-                for s in sentences:
-                    if should_stop():
-                        break
-                    ready.put(make(s))
+                    for i, s in enumerate(source):
+                        if should_stop():
+                            break
+                        if i == 0 and can_stream and not (self.laughs and _is_laugh(s)):
+                            # The first sentence plays while it is still arriving, so he starts talking sooner.
+                            pause = self.question_pause if s.rstrip().endswith("?") else self.pause
+                            ready.put((s, _Streamed(self.tts, s, pause), getattr(self.tts, "rate", None) or 24000))
+                        elif cloud:
+                            ready.put(pool.submit(make, s))
+                        else:
+                            ready.put(make(s))
+            except Exception as exc:
+                self.log(f"voice error: {exc}")
             ready.put(None)
 
         threading.Thread(target=producer, daemon=True).start()
@@ -708,6 +714,10 @@ class Speaker:
                 item = ready.get()
                 if item is None or should_stop():
                     break
+                if hasattr(item, "result"):            # a sentence still being made
+                    item = item.result()
+                    if should_stop():
+                        break
                 sentence, audio, rate = item
                 if on_sentence:
                     on_sentence(sentence)
