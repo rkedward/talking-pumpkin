@@ -391,8 +391,9 @@ def greet(image_b64, people, note=""):
     return {"session": sid, **result}
 
 
-def chat(sid, text, on_stage=None):
-    """on_stage: name of the creature currently visible in the window, if any."""
+def chat(sid, text, on_stage=None, cut_off=None):
+    """on_stage: name of the creature currently visible in the window, if any. cut_off: they talked over
+    your last reply; this is the part of it you got to say."""
     with _lock:
         session = _sessions.get(sid)
     if session is None:
@@ -406,6 +407,9 @@ def chat(sid, text, on_stage=None):
         title = tunes.catalog().get(session["song"], {}).get("title", session["song"])
         note += (f" (Game: the song you played this round is {session['song']}: {title}. If this is a guess, judge it"
                  " against that song; that's the only song for this visit.)")
+    if cut_off is not None:
+        said = f'you had only said "{cut_off}"' if cut_off else "before you got a word out"
+        note += f" (They talked over your last reply, {said}. Answer what they said; don't repeat yourself.)"
     history = session["history"] + [{"role": "user", "content": f'The trick-or-treater says: "{text}"{note}'}]
     if FAKE:
         data = {"say": random.choice(FAKE_ANSWERS)}

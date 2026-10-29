@@ -37,7 +37,8 @@ def _find_device(name, kind):
 # --------------------------------------------------------------------------------------------- mic
 
 class Microphone:
-    """Continuously reads 30 ms frames into a queue. Frames are dropped while the pumpkin is talking."""
+    """Continuously reads 30 ms frames into a queue. Frames are dropped while the pumpkin is talking, unless
+    barge-in is listening for someone talking over him (which needs the mic array's echo cancellation)."""
 
     FRAME_S = 0.03
 
@@ -47,6 +48,9 @@ class Microphone:
         self.frames = queue.Queue(maxsize=400)
         self.muted_until = 0.0
         self.user_muted = False
+        self.through_speech = False   # true while barge-in listens during speech: speaking doesn't mute
+        self.heard_level = 0.0        # loudness of the pumpkin's voice coming out of the speaker right now
+        self.name = ""
         self.ok = False
         if not sd:
             log("mic: sounddevice/PortAudio not available; type questions in the debug panel")
@@ -67,6 +71,7 @@ class Microphone:
                                          blocksize=int(self.rate * self.FRAME_S), callback=self._callback)
             self.stream.start()
             self.ok = True
+            self.name = info["name"]
             log(f"mic: {info['name']} (channel {self.channel})")
         except Exception as exc:
             log(f"mic: could not open ({exc}); type questions in the debug panel")
@@ -78,6 +83,11 @@ class Microphone:
             self.frames.put_nowait(indata[:, self.channel].copy())
         except queue.Full:
             pass
+
+    @property
+    def is_array(self):
+        """A reSpeaker/XVF mic array, whose firmware cancels the echo of whatever it plays itself."""
+        return any(k in self.name.lower() for k in ("xvf", "respeaker"))
 
     def mute_for(self, seconds):
         self.muted_until = max(self.muted_until, time.time() + seconds)
@@ -93,13 +103,96 @@ class Listener:
     def __init__(self, mic, cfg, stt):
         self.mic, self.cfg, self.stt = mic, cfg, stt
         self.noise = 150.0
+        self.voice_hint = None         # optional: the mic array's own "someone is speaking" flag
+        self.interrupted = threading.Event()
+        self._carry = []               # audio of whoever interrupted, picked up by the next listen()
+        self._watcher = None
+        self.echo_gain, self._echo_frames = 0.0, 0
 
+    # ---- barge-in: someone talks over the pumpkin -------------------------------------------------
+    def start_watch(self):
+        """Listen while the pumpkin talks. Sets `interrupted` when someone clearly talks over him, and keeps
+        their words so the next listen() hears the whole sentence. Only sensible with echo cancellation
+        (speaker plugged into the mic array), or he interrupts himself."""
+        self.stop_watch()
+        if not self.mic.ok or self.stt is None:
+            return
+        self.interrupted.clear()
+        self._carry = []
+        self.mic.flush()
+        self.mic.through_speech = True
+        self._watching = True
+        self._watcher = threading.Thread(target=self._watch, daemon=True, name="barge-in")
+        self._watcher.start()
+
+    def reset(self):
+        """Forget an interruption that nobody listened to (a new visit starts)."""
+        self.stop_watch()
+        self.interrupted.clear()
+        self._carry = []
+
+    def stop_watch(self):
+        self._watching = False
+        if self._watcher:
+            self._watcher.join(timeout=0.5)
+            self._watcher = None
+        self.mic.through_speech = False
+
+    def _watch(self):
+        """Talking over him = loud for most of a short window, louder than the room's background noise and
+        clearly louder than the echo of his own voice. The echo is predicted from what the speaker is
+        playing right now times how strongly the speaker reaches the mic (learned while he talks). With
+        echo cancellation that echo is tiny; with a separate speaker it is large, so kids have to talk up."""
+        cfg, frame_s = self.cfg, Microphone.FRAME_S
+        grace_until = time.time() + float(cfg["barge_grace_s"])
+        window = max(2, int(round(float(cfg["barge_window_s"]) / frame_s)))
+        need = max(2, int(round(float(cfg["barge_min_s"]) / frame_s)))
+        ratio, margin = float(cfg["barge_ratio"]), float(cfg["barge_echo_margin"])
+        recent, refs, loud_flags = [], [], []
+        while self._watching:
+            try:
+                frame = self.mic.frames.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            recent = (recent + [frame])[-(window + 10):]     # what they said, plus 300 ms before
+            refs = (refs + [self.mic.heard_level])[-12:]      # what he played in the last ~0.35 s
+            rms = float(np.sqrt(np.mean(frame.astype(np.float32) ** 2)))
+            ref = max(refs)
+            steady = refs[-4:]
+            if len(steady) == 4 and min(steady) > 200:      # steady playback: the echo level is clear
+                self._learn_echo(rms / (sum(steady) / 4))
+            if time.time() < grace_until or self._echo_frames < 30:
+                continue                                      # still settling / not yet learned
+            echo = self.echo_gain * ref
+            limit = max(self.noise * float(cfg["start_ratio"]), float(cfg["min_rms"])) * ratio
+            loud_flags = (loud_flags + [rms > max(limit, echo * margin)])[-window:]
+            if sum(loud_flags) >= need and (self.voice_hint is None or self.voice_hint()):
+                self._carry = recent
+                self.interrupted.set()
+                return
+
+    def _learn_echo(self, r):
+        """How loud the mic hears the speaker, relative to what is played. Quick to go down, slow to go up,
+        so a child talking over him doesn't teach it that his echo is loud."""
+        if self._echo_frames < 30:
+            self.echo_gain = r if self._echo_frames == 0 else max(self.echo_gain, r) * 0.9 + r * 0.1
+        else:
+            self.echo_gain += (r - self.echo_gain) * (0.15 if r < self.echo_gain else 0.01)
+        self._echo_frames += 1
+
+    # ---- one utterance ------------------------------------------------------------------------------
     def listen(self, timeout_s, typed, should_stop, on_speech=None):
         """Returns heard text, a typed question, or None after timeout_s of nobody speaking."""
-        self.mic.flush()
+        carry, self._carry = self._carry, []
+        if not carry:
+            self.mic.flush()
         deadline = time.time() + timeout_s
         pre_roll, voiced, silent, speech = [], [], 0, False
         frame_s = Microphone.FRAME_S
+        if carry:                       # someone interrupted: they are mid-sentence already
+            speech, chunks = True, list(carry)
+            if on_speech:
+                on_speech()
         while True:
             if should_stop():
                 return None
@@ -399,6 +492,16 @@ class Speaker:
         self.device = _find_device(cfg["output_device"], "output")
         if cfg.get("output_device") and self.device is None:
             log(f"speaker: no output device matching {cfg['output_device']!r}; using the default")
+        # Echo cancellation: the mic array removes its own playback from what it hears, so the pumpkin can
+        # listen while he talks. That only works when he plays through the mic array (its 3.5 mm jack or
+        # speaker connector), not through a separate USB speaker.
+        self.aec = False
+        if sd and mic.ok and mic.is_array:
+            try:
+                out_name = sd.query_devices(self.device, "output")["name"]
+                self.aec = out_name == mic.name or any(k in out_name.lower() for k in ("xvf", "respeaker"))
+            except Exception:
+                pass
         self._formats = {}   # voice sample rate -> (rate, channels) the output device accepts
         # Output buffer in seconds. A small buffer underruns (choppy speech) whenever the camera, speech
         # recognition or the next sentence's synthesis keeps the CPU busy; the mouth timing allows for it.
@@ -490,7 +593,7 @@ class Speaker:
                 self._play(stream, audio, rate, on_level, should_stop)
         finally:
             if stream is not None:
-                self._close(stream)
+                self._close(stream, cut=should_stop())
             on_level(0.0)
 
     def _format(self, rate):
@@ -527,7 +630,7 @@ class Speaker:
             stream.write(np.zeros((int(rate * self.lead_in), channels), np.int16))
             self._play(stream, audio, rate, on_level, should_stop)
         finally:
-            self._close(stream)
+            self._close(stream, cut=should_stop())
             on_level(0.0)
 
     def _open(self, rate, channels=1):
@@ -537,11 +640,15 @@ class Speaker:
         stream.start()
         return stream
 
-    def _close(self, stream):
+    def _close(self, stream, cut=False):
         try:
-            time.sleep(stream.latency or 0)   # let the buffered tail play out
-            stream.stop()
+            if cut:                           # interrupted: go quiet now, drop what is still buffered
+                stream.abort()
+            else:
+                time.sleep(stream.latency or 0)   # let the buffered tail play out
+                stream.stop()
             stream.close()
+            self.mic.heard_level = 0.0
         except Exception:
             pass
 
@@ -554,7 +661,8 @@ class Speaker:
         rms = np.sqrt(np.mean(blocks.astype(np.float32) ** 2, axis=1))
         ref = max(np.percentile(rms, 90), 1.0)
         levels = np.clip(rms / ref, 0, 1) ** 0.6
-        self.mic.mute_for(len(audio) / rate + (stream.latency or 0) + 0.6)   # don't listen to ourselves
+        if not self.mic.through_speech:
+            self.mic.mute_for(len(audio) / rate + (stream.latency or 0) + 0.6)   # don't listen to ourselves
         delay = int(round((stream.latency or 0) / self.BLOCK_S))  # blocks written but not yet heard
         for i in range(n_blocks):
             if should_stop():
@@ -564,6 +672,7 @@ class Speaker:
                 out = np.clip(out.astype(np.float32) * Speaker.volume, -32768, 32767).astype(np.int16)
             stream.write(out if self.channels == 1 else np.repeat(out[:, None], self.channels, axis=1))
             on_level(float(levels[i - delay]) if i >= delay else 0.0)
+            self.mic.heard_level = float(rms[i - delay]) * Speaker.volume if i >= delay else 0.0
 
     def _mime(self, sentence, on_level, should_stop):
         """No audio available: move the mouth at a speaking pace so the face still 'talks'."""

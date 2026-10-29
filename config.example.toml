@@ -22,6 +22,8 @@ max_visit_s = 90
 
 [mic]
 device = "ReSpeaker"           # part of the mic's name; falls back to the default mic
+# barge_in = "auto"            # talk over the pumpkin to interrupt him: auto = on when the speaker is plugged
+                               # into the mic array (output_device = "XVF3800" below); true = try anyway; false = off
 
 [stt]
 model = "base.en"              # tiny.en = faster, small.en = more accurate

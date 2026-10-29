@@ -113,6 +113,7 @@ class Pumpkin:
                 self.log(f"speech recognition off ({type(exc).__name__}: {exc}); type questions in the debug panel")
         self.listener = Listener(self.mic, cfg["mic"], stt)
         self.speaker = Speaker(make_tts(cfg["tts"], self.log), cfg["tts"], self.mic, self.log)
+        self.barge_in = self._barge_in_setup(cfg["mic"])
         Speaker.volume = float(saved.get("volume", 1.0))
         self.show = None
         if cfg["window"]["enabled"]:
@@ -132,21 +133,57 @@ class Pumpkin:
         self.state = s
         self.hub.publish({"t": "state", "state": s})
 
-    def say(self, text):
+    def _barge_in_setup(self, mc):
+        """Whether kids can talk over the pumpkin (see [mic] barge_in)."""
+        mode = str(mc["barge_in"]).lower()
+        if mode in ("false", "off", "no", "0") or not self.mic.ok or self.listener.stt is None:
+            return False
+        aec = self.speaker.aec
+        if mode == "auto" and not aec:
+            if self.mic.is_array:
+                self.log("barge-in off: plug the speaker into the mic array and set [tts] output_device = "
+                         "\"XVF3800\" so it can cancel the pumpkin's own voice (or set [mic] barge_in = true to try anyway)")
+            return False
+        vad = str(mc["barge_vad"]).lower()
+        if (vad == "true" or (vad == "auto" and aec)) and self.doa and self.doa.available:
+            self.listener.voice_hint = lambda: time.time() - self.doa.voice_at < 0.5
+        self.log("barge-in on: talk over the pumpkin to interrupt him" +
+                 (" (mic array cancels his voice)" if aec else " (no echo cancellation: talk up!)"))
+        return True
+
+    def say(self, text, interruptible=False):
+        """Speak. With interruptible and barge-in on, stops as soon as someone talks over him and returns
+        the part he got out (their words go to the next listen()); otherwise returns None."""
         if not text:
-            return
+            return None
         self.log(f"🎃 {text}", "said")
         before = self.state
         self.set_state("speaking")
         self.speaking = True
-        self.speaker.speak(text, on_level=self._set_mouth,
-                           on_sentence=self._on_sentence,
-                           should_stop=lambda: self.abort_visit)
+        watch = interruptible and self.barge_in
+        spoken = []
+
+        def on_sentence(sentence):
+            spoken.append(sentence)
+            self._on_sentence(sentence)
+
+        if watch:
+            self.listener.start_watch()
+        try:
+            self.speaker.speak(text, on_level=self._set_mouth, on_sentence=on_sentence,
+                               should_stop=lambda: self.abort_visit or (watch and self.listener.interrupted.is_set()))
+        finally:
+            if watch:
+                self.listener.stop_watch()
         self.speaking = False
         self.mouth = 0.0
         self.props.expression("happy" if self.awake else "neutral")
         if before in ("idle", "cooldown"):
             self.set_state(before)
+        if watch and self.listener.interrupted.is_set() and not self.abort_visit:
+            self.log("✋ interrupted")
+            return " ".join(spoken)
+        return None
 
     def play_song(self, song_id):
         """The guessing game's tune; the mouth bobs along as if the pumpkin is humming it."""
@@ -157,10 +194,17 @@ class Pumpkin:
             return
         self.log(f"🎵 {tunes.catalog()[song_id]['title']}", "said")
         self.speaking = True
-        self.speaker.play_clip(audio, rate, on_level=lambda level: self._set_mouth(level * 0.5),
-                               should_stop=lambda: self.abort_visit)
+        if self.barge_in:   # shouting out the answer mid-song stops the song
+            self.listener.start_watch()
+        try:
+            self.speaker.play_clip(audio, rate, on_level=lambda level: self._set_mouth(level * 0.5),
+                                   should_stop=lambda: self.abort_visit or self.listener.interrupted.is_set())
+        finally:
+            self.listener.stop_watch()
         self.speaking = False
         self.mouth = 0.0
+        if self.barge_in and self.listener.interrupted.is_set():
+            self.log("✋ interrupted the song")
 
     def mood(self, name):
         """The feeling of a whole reply, chosen by the brain; the projected face shows it."""
@@ -262,6 +306,7 @@ class Pumpkin:
         v = self.cfg["visit"]
         self.abort_visit = False
         self.summons = 0
+        self.listener.reset()
         doorbell, self.doorbell_pending = self.doorbell_pending, False
         if doorbell:
             self.set_state("doorbell")
@@ -294,8 +339,9 @@ class Pumpkin:
             self.log(f"costumes: {'; '.join(result['costumes'])}")
         session = result.get("session", "")
         self.mood(result.get("mood"))
-        self.say(result.get("say"))
-        self.sideshow(result)
+        cut_off = self.say(result.get("say"), interruptible=True)
+        if cut_off is None:
+            self.sideshow(result)
 
         started, turns = time.time(), 0
         max_turns, max_s, game_on = int(v["max_turns"]), float(v["max_visit_s"]), False
@@ -319,12 +365,16 @@ class Pumpkin:
             self.set_state("thinking")
             on_stage = self.show.active() if self.show else None
             try:
-                reply = brain.chat(session, heard, f"{on_stage['name']} (in {self.show.screen})" if on_stage else None)
+                reply = brain.chat(session, heard, f"{on_stage['name']} (in {self.show.screen})" if on_stage else None,
+                                   cut_off=cut_off)
             except Exception as exc:
                 self.log(f"claude error: {type(exc).__name__}: {exc}")
                 reply = {"say": "Ooh, my pumpkin brain went fuzzy. Happy Halloween!"}
             self.mood(reply.get("mood"))
-            self.say(reply["say"])
+            cut_off = self.say(reply["say"], interruptible=True)
+            if cut_off is not None:   # they talked over him: skip the rest and hear them out
+                turns += 1
+                continue
             self.sideshow(reply)
             if reply.get("play_song") and not self.abort_visit:
                 if not game_on:   # a game takes a few more turns than a chat

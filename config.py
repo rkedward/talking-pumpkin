@@ -54,6 +54,17 @@ DEFAULTS = {
         "min_rms": 250,
         "silence_end_s": 0.8,
         "max_utterance_s": 8,
+        # Barge-in: keep listening while the pumpkin talks and stop when someone talks over him. "auto" turns
+        # it on when he plays through the mic array (its 3.5 mm jack or speaker connector), whose echo
+        # cancellation keeps him from hearing himself. true also tries it with a separate speaker (kids then
+        # have to talk louder than his echo); false = never.
+        "barge_in": "auto",
+        "barge_min_s": 0.25,          # this much speech within barge_window_s counts as talking over him
+        "barge_window_s": 0.4,
+        "barge_ratio": 1.5,           # stricter than normal listening (start_ratio, min_rms) by this factor
+        "barge_echo_margin": 2.5,     # and this many times louder than the predicted echo of his voice
+        "barge_grace_s": 0.5,         # ignore the first moment of each reply
+        "barge_vad": "auto",          # also require the mic array's own speech detector (auto: with echo cancellation)
     },
     "stt": {
         "engine": "whisper",          # whisper | none (type questions in the debug panel)
@@ -63,7 +74,8 @@ DEFAULTS = {
     },
     "tts": {
         "engine": "piper",            # piper | openai | elevenlabs | espeak | none
-        "output_device": "",          # part of the output device name; empty = default
+        "output_device": "",          # part of the output device name; empty = default. "XVF3800" plays through
+                                      # the mic array's jack, which lets barge-in cancel the echo
         "sentence_pause": 0.35,       # seconds of silence after each sentence
         "question_pause": 1.0,        # seconds of silence after a question
         "output_latency": 0.25,       # speaker buffer, seconds: raise (0.4) if speech is choppy, lower for tighter lip sync

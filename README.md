@@ -86,6 +86,26 @@ Try it with family before Halloween night. With no API key (fake mode) it uses c
 for checking the camera, eyes, voice and mic; add the key for real costume jokes. Once the core pumpkin
 works on its own, add whichever add-ons you want below.
 
+### 1e. Let kids interrupt him (barge-in)
+
+Like ChatGPT's voice mode, the pumpkin can keep listening while he talks and stop the moment someone talks
+over him; he then hears out what they said and answers that. Shouting the answer during the song game
+stops the song too.
+
+The trick is not hearing himself. The XVF3800 mic array cancels the echo of whatever it plays *itself*, so
+the speaker has to be plugged into the mic array rather than into the Pi:
+
+1. Plug a powered speaker into the mic array's 3.5 mm jack (or a small passive 4-8 ohm speaker into its JST
+   speaker connector). The USB-only speaker (item 9) can't be used for this.
+2. In `config.toml` set `output_device = "XVF3800"` under `[tts]`. If it is quiet, run `alsamixer`, pick the
+   XVF3800, raise PCM to 100% and `sudo alsactl store`.
+3. Restart. The log says `barge-in on ... (mic array cancels his voice)`.
+
+The echo canceller needs a few seconds of his voice to settle after starting up. `[mic] barge_in = true`
+tries barge-in with a separate speaker as well, but then kids have to be clearly louder than his voice;
+`false` turns it off. If he stops for noises that aren't speech, raise `barge_ratio` (1.5) or `barge_min_s`
+(0.25); if kids have to shout, lower them.
+
 ## Add-ons
 
 ### Add-on: Window side show
