@@ -51,6 +51,11 @@ function connect() {
       overlay.outline(ev.quad);
     } else if (ev.t === "state") {
       state = ev.state;
+      face.setState(ev.state);
+    } else if (ev.t === "mood") {
+      face.setMood(ev.name);
+    } else if (ev.t === "expr") {
+      face.setAccent(ev.name, ev.ms);
     } else if (ev.t === "log") {
       log(ev.text, ev.cls);
     }
@@ -72,6 +77,7 @@ setInterval(async () => {
       line += ` · windows on: ${s.windows_on.join(", ") || "none"}`;
       fillWindows(s.windows, s.windows_on);
     }
+    if (s.volume !== undefined && !volDragging) { $("vol").value = s.volume; $("volVal").textContent = `${s.volume}%`; }
     if (s.mic_muted) line += " · MIC MUTED";
     if (s.fake) line += " · FAKE MODE";
     stateEl.textContent = line;
@@ -93,9 +99,22 @@ requestAnimationFrame(frame);
 // ---- Controls ----
 const post = (cmd, body = {}) => fetch(`api/${cmd}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
+// Camera view: fetch one frame at a time (only while the panel is open). Each frame asks for the next, and a
+// timer restarts the chain if a frame ever gets lost, so the picture can't freeze for good.
+let videoTimer = null, videoLast = 0;
+function nextFrame() {
+  clearTimeout(videoTimer);
+  if (!$("debug").classList.contains("on")) return;
+  videoLast = Date.now();
+  $("video").src = `frame.jpg?t=${videoLast}`;
+  videoTimer = setTimeout(nextFrame, 3000);   // watchdog: nothing came back in 3 s, ask again
+}
+$("video").addEventListener("load", () => { clearTimeout(videoTimer); videoTimer = setTimeout(nextFrame, 120); });
+$("video").addEventListener("error", () => { clearTimeout(videoTimer); videoTimer = setTimeout(nextFrame, 1000); });
+
 function toggleDebug() {
   const on = $("debug").classList.toggle("on");
-  $("video").src = on ? "video.mjpg" : "";   // only stream the camera while the panel is open
+  if (on) nextFrame(); else { clearTimeout(videoTimer); $("video").removeAttribute("src"); }
 }
 
 document.addEventListener("keydown", (e) => {
@@ -118,6 +137,11 @@ document.querySelectorAll("[data-cmd]").forEach((b) => b.addEventListener("click
   const cmd = b.dataset.cmd;
   post(cmd);
 }));
+
+// Volume slider: sends the new level when you let go (the label follows while dragging).
+let volDragging = false;
+$("vol").addEventListener("input", (e) => { volDragging = true; $("volVal").textContent = `${e.target.value}%`; });
+$("vol").addEventListener("change", (e) => { volDragging = false; post("volume", { percent: Number(e.target.value) }); });
 
 // Nudge buttons, so the face can be lined up from a phone.
 document.querySelectorAll("[data-key]").forEach((b) => b.addEventListener("click", () => {

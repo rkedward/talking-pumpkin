@@ -43,6 +43,9 @@ unplug/replug it. `arecord -l` should then list the XVF3800. (The plain XVF3800 
 ReSpeaker v2.0 work without this step.)
 
 Logs: `journalctl --user -u pumpkin -f` · Restart: `systemctl --user restart pumpkin`
+To use OpenAI (ChatGPT's maker) instead of Claude, put `OPENAI_API_KEY=...` in `.env` and leave
+`ANTHROPIC_API_KEY` out: the pumpkin then uses OpenAI for the conversation (`[claude] openai_model`,
+default `gpt-5-mini`). Add `engine = "openai"` under `[tts]` for OpenAI's voice too.
 Add the API key later by editing `~/pumpkin/.env` (`ANTHROPIC_API_KEY=...`, and delete the
 `PUMPKIN_FAKE=1` line), then restart.
 
@@ -239,16 +242,20 @@ The most useful ones:
 
 | Setting | Default | What it does |
 |---|---|---|
-| `[claude] model` | `claude-opus-5-5` | `claude-haiku-4-5` replies faster. |
+| `[claude] model` | `claude-opus-5-5` | `claude-haiku-5-5` replies faster. |
 | `[camera] hfov_deg` | 66 | Camera's horizontal field of view (Camera Module 3 Wide: 102). Used to match voices to people. |
 | `[detector] min_height` | 0.25 | Smallest person (fraction of frame height) that counts as a visitor. |
 | `[visit] max_turns`, `max_visit_s` | 5, 90 | Wrap up so the line keeps moving. |
 | `[stt] model` | `base.en` | `tiny.en` is faster, `small.en` more accurate (slower on the Pi). |
-| `[tts] engine` | `piper` | `elevenlabs` for cloud character voices, `espeak` for a robotic fallback. |
+| `[tts] engine` | `piper` | `openai` or `elevenlabs` for natural cloud voices, `espeak` for a robotic fallback. |
 | `[tts] piper_voice` | `en_US-ryan-medium` | Any voice from the Piper voice list; rerun `install_pi.sh` to download it. Try `en_GB-alan-medium` or `en_US-joe-medium`. |
 | `[tts] pitch_semitones` | -2 | Deeper (negative) or squeakier (positive) voice. |
 | `[props] eyebrows` | `none` | `pca9685` for the servo HAT/bonnet, `gpio` for servos straight on GPIO pins. |
 | `[props] fog_pin`, `lights_pin` | 0 (off) | GPIO numbers of the fog and light relays, e.g. 17 and 27. |
+
+OpenAI: set `engine = "openai"` (and optionally `openai_voice`, e.g. `cedar`, `marin`, `ash`, `onyx`), and add
+`OPENAI_API_KEY=...` to `.env`. The key comes from platform.openai.com (pay as you go, about a cent or two per
+minute of speech); a ChatGPT subscription doesn't include it. `openai_instructions` sets the speaking style.
 
 ElevenLabs: set `engine = "elevenlabs"` and `elevenlabs_voice_id`, and add `ELEVENLABS_API_KEY=...` to `.env`.
 

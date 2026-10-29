@@ -1,9 +1,10 @@
-"""Speech in (mic + voice activity detection + local Whisper) and speech out (Piper neural TTS, ElevenLabs
-or espeak) with mouth movement driven by the actual loudness of the audio being played."""
+"""Speech in (mic + voice activity detection + local Whisper) and speech out (Piper neural TTS, OpenAI,
+ElevenLabs or espeak) with mouth movement driven by the actual loudness of the audio being played."""
 
 import io
 import json
 import queue
+import random
 import re
 import shutil
 import subprocess
@@ -11,6 +12,7 @@ import threading
 import time
 import urllib.request
 import wave
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -232,6 +234,8 @@ class PiperTTS:
 class ElevenLabsTTS:
     """Cloud character voices. Needs ELEVENLABS_API_KEY and a voice id from your ElevenLabs voice library."""
 
+    cloud = True
+
     RATE = 22050
 
     def __init__(self, cfg, log):
@@ -252,6 +256,38 @@ class ElevenLabsTTS:
             return np.frombuffer(r.read(), np.int16), self.RATE
 
 
+class OpenAITTS:
+    """OpenAI's natural voices (the same family as ChatGPT's). Needs OPENAI_API_KEY from platform.openai.com;
+    a ChatGPT subscription doesn't include API use."""
+
+    cloud = True
+    RATE = 24000   # response_format "pcm" is 24 kHz, 16-bit, mono
+
+    def __init__(self, cfg, log):
+        import os
+        self.key = os.environ.get("OPENAI_API_KEY", "")
+        if not self.key:
+            raise RuntimeError("put OPENAI_API_KEY=... in .env")
+        self.voice = cfg["openai_voice"]
+        self.model = cfg["openai_model"]
+        self.instructions = cfg["openai_instructions"]
+        self.speed = float(cfg.get("openai_speed", 1.0))
+        log(f"voice: OpenAI {self.model} {self.voice}")
+
+    def synth(self, text):
+        body = {"model": self.model, "voice": self.voice, "input": text, "response_format": "pcm"}
+        if self.instructions and not self.model.startswith("tts-1"):
+            body["instructions"] = self.instructions
+        if self.speed != 1.0:
+            body["speed"] = self.speed
+        req = urllib.request.Request(
+            "https://api.openai.com/v1/audio/speech", data=json.dumps(body).encode(),
+            headers={"Authorization": f"Bearer {self.key}", "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            data = r.read()
+        return np.frombuffer(data[:len(data) // 2 * 2], np.int16), self.RATE
+
+
 class EspeakTTS:
     """Robotic but zero-setup fallback (sudo apt install espeak-ng)."""
 
@@ -270,22 +306,81 @@ class EspeakTTS:
             return np.frombuffer(w.readframes(w.getnframes()), np.int16), w.getframerate()
 
 
+class _WithBackup:
+    """Uses the cloud voice, and the local one for any sentence the cloud voice fails on."""
+
+    cloud = True
+
+    def __init__(self, main, backup, name, log):
+        self.main, self.backup, self.name, self.log = main, backup, name, log
+        self.warned = 0
+
+    def synth(self, text):
+        try:
+            return self.main.synth(text)
+        except Exception as exc:
+            if time.time() - self.warned > 60:
+                detail = exc.read().decode(errors="replace")[:200] if hasattr(exc, "read") else ""
+                self.log(f"voice: {self.name} failed ({exc} {detail}); using the backup voice")
+                self.warned = time.time()
+            return self.backup.synth(text)
+
+
 def make_tts(cfg, log):
-    engines = {"piper": PiperTTS, "elevenlabs": ElevenLabsTTS, "espeak": EspeakTTS}
+    engines = {"piper": PiperTTS, "openai": OpenAITTS, "elevenlabs": ElevenLabsTTS, "espeak": EspeakTTS}
     order = [cfg["engine"]] + [e for e in ("piper", "espeak") if e != cfg["engine"]]
     if cfg["engine"] == "none" or not sd:
         log("voice: no audio output; the face will mouth the words silently")
         return None
-    for name in order:
+    for i, name in enumerate(order):
         try:
-            return engines[name](cfg, log)
+            tts = engines[name](cfg, log)
         except Exception as exc:
             log(f"voice: {name} unavailable ({exc})")
+            continue
+        if name in ("openai", "elevenlabs"):   # cloud voice: keep a local one for when it fails (no credit, no internet)
+            for backup in order[i + 1:]:
+                try:
+                    return _WithBackup(tts, engines[backup](cfg, log), name, log)
+                except Exception:
+                    pass
+        return tts
     log("voice: no TTS engine available; the face will mouth the words silently")
     return None
 
 
 # --------------------------------------------------------------------------------------------- speaker
+
+def _resample(audio, rate, new_rate):
+    n = int(len(audio) * new_rate / rate)
+    return np.interp(np.linspace(0, len(audio) - 1, n), np.arange(len(audio)), audio.astype(np.float32)).astype(np.int16)
+
+
+def _trim(audio, rate, threshold=300, keep_s=0.04):
+    """Cut the silence a voice engine leaves before and after a sentence; the pause settings decide the gaps."""
+    loud = np.flatnonzero(np.abs(audio.astype(np.int32)) > threshold)
+    if not len(loud):
+        return audio
+    keep = int(rate * keep_s)
+    return audio[max(0, loud[0] - keep): loud[-1] + keep]
+
+
+_LAUGH = re.compile(r"^\W*((ha|ho|hee|he|heh|hah|mwa|mwah)\W*)+$", re.I)
+
+
+def _is_laugh(sentence):
+    return bool(_LAUGH.match(sentence))
+
+
+def _load_wav(path):
+    with wave.open(str(path)) as w:
+        if w.getsampwidth() != 2:
+            raise ValueError("needs 16-bit audio")
+        audio = np.frombuffer(w.readframes(w.getnframes()), np.int16)
+        if w.getnchannels() > 1:
+            audio = audio.reshape(-1, w.getnchannels()).mean(axis=1).astype(np.int16)
+        return audio, w.getframerate()
+
 
 def _sentences(text):
     return [s.strip() for s in re.findall(r"[^.!?]+[.!?]*", text) if s.strip()] or [text]
@@ -296,42 +391,161 @@ class Speaker:
     reports a 0..1 mouth-opening level from the loudness of the audio as it is heard."""
 
     BLOCK_S = 1 / 60
+    volume = 1.0   # shared by the pumpkin and his assistants; set from the debug panel (0 .. 1.5)
 
     def __init__(self, tts, cfg, mic, log):
         self.tts, self.mic, self.log = tts, mic, log
+        self.channels = 1
         self.device = _find_device(cfg["output_device"], "output")
+        if cfg.get("output_device") and self.device is None:
+            log(f"speaker: no output device matching {cfg['output_device']!r}; using the default")
+        self._formats = {}   # voice sample rate -> (rate, channels) the output device accepts
+        # Output buffer in seconds. A small buffer underruns (choppy speech) whenever the camera, speech
+        # recognition or the next sentence's synthesis keeps the CPU busy; the mouth timing allows for it.
+        self.latency = float(cfg.get("output_latency", 0.25))
+        # Each sentence is synthesized on its own, which trims the natural pause after it; add one back.
+        self.pause = float(cfg.get("sentence_pause", 0.35))
+        self.question_pause = float(cfg.get("question_pause", 1.0))   # longer beat after a question
+        self.lead_in = float(cfg.get("lead_in", 0.3))
+        self.laughs = []   # recorded laughs, played instead of a spoken "Ho ho ho!"
+        folder = resolve(cfg.get("laugh_dir", "sounds/laughs"))
+        for path in sorted(folder.glob("*.wav")) if folder.is_dir() else []:
+            try:
+                self.laughs.append(_load_wav(path))
+            except Exception as exc:
+                log(f"laugh {path.name} skipped ({exc})")
+        if self.laughs:
+            log(f"voice: {len(self.laughs)} recorded laughs")
 
     def speak(self, text, on_level, on_sentence=None, should_stop=lambda: False):
         sentences = _sentences(text)
+        if not self.laughs and getattr(self.tts, "cloud", False):
+            # Spoken on its own, "Ho ho ho!" gets read out as words; said right after the joke, the voice laughs.
+            merged = []
+            for s in sentences:
+                if merged and _is_laugh(s):
+                    merged[-1] += " " + s
+                else:
+                    merged.append(s)
+            sentences = merged
         ready = queue.Queue()
 
-        def producer():
-            for s in sentences:
-                if should_stop():
-                    break
-                try:
+        def make(s):
+            if should_stop():
+                return s, None, None
+            try:
+                if self.laughs and _is_laugh(s):
+                    audio, rate = random.choice(self.laughs)
+                else:
                     audio, rate = self.tts.synth(s) if self.tts else (None, None)
-                except Exception as exc:
-                    self.log(f"voice error: {exc}")
-                    audio, rate = None, None
-                ready.put((s, audio, rate))
+                if audio is not None and len(audio):
+                    audio = _trim(audio, rate)
+                    pause = self.question_pause if s.rstrip().endswith("?") else self.pause
+                    if pause > 0:
+                        audio = np.concatenate([audio, np.zeros(int(rate * pause), np.int16)])
+            except Exception as exc:
+                self.log(f"voice error: {exc}")
+                audio, rate = None, None
+            return s, audio, rate
+
+        def producer():
+            if getattr(self.tts, "cloud", False):
+                # Cloud voices take a second or more per request: ask for every sentence at once (in order), so
+                # the next one is ready before the current one ends instead of leaving a gap.
+                with ThreadPoolExecutor(max_workers=4) as pool:
+                    for item in pool.map(make, sentences):
+                        ready.put(item)
+            else:
+                for s in sentences:
+                    if should_stop():
+                        break
+                    ready.put(make(s))
             ready.put(None)
 
         threading.Thread(target=producer, daemon=True).start()
-        while True:
-            item = ready.get()
-            if item is None or should_stop():
-                break
-            sentence, audio, rate = item
-            if on_sentence:
-                on_sentence(sentence)
-            if audio is None or len(audio) == 0:
-                self._mime(sentence, on_level, should_stop)
-            else:
-                self._play(audio, rate, on_level, should_stop)
-        on_level(0.0)
+        # One output stream for the whole reply. Opening a new one per sentence let the USB speaker (and
+        # PipeWire, which suspends idle outputs) wake up late and swallow the first word of each sentence.
+        stream, stream_rate = None, None
+        try:
+            while True:
+                item = ready.get()
+                if item is None or should_stop():
+                    break
+                sentence, audio, rate = item
+                if on_sentence:
+                    on_sentence(sentence)
+                if audio is None or len(audio) == 0:
+                    self._mime(sentence, on_level, should_stop)
+                    continue
+                out_rate, channels = self._format(rate)
+                if out_rate != rate:
+                    audio = _resample(audio, rate, out_rate)
+                    rate = out_rate
+                if stream is None or rate != stream_rate:
+                    if stream is not None:
+                        self._close(stream)
+                    stream, stream_rate = self._open(rate, channels), rate
+                    # lead-in silence so the speaker is awake before the first word
+                    stream.write(np.zeros((int(rate * self.lead_in), channels), np.int16))
+                self._play(stream, audio, rate, on_level, should_stop)
+        finally:
+            if stream is not None:
+                self._close(stream)
+            on_level(0.0)
 
-    def _play(self, audio, rate, on_level, should_stop):
+    def _format(self, rate):
+        """A sample rate and channel count the output device accepts. A speaker picked by name is opened
+        directly (no PipeWire in between), and USB speakers often take only 48 kHz stereo."""
+        if rate not in self._formats:
+            found = (rate, 1)
+            for r in (rate, 48000, 44100):
+                ok = None
+                for ch in (1, 2):
+                    try:
+                        sd.check_output_settings(device=self.device, samplerate=r, channels=ch, dtype="int16")
+                        ok = (r, ch)
+                        break
+                    except Exception:
+                        pass
+                if ok:
+                    found = ok
+                    break
+            self._formats[rate] = found
+            if found != (rate, 1):
+                self.log(f"speaker: playing at {found[0]} Hz, {found[1]} channel(s)")
+        return self._formats[rate]
+
+    def play_clip(self, audio, rate, on_level=lambda level: None, should_stop=lambda: False):
+        """Play ready-made audio (a song for the game) through the same speaker."""
+        if not sd or audio is None or not len(audio):
+            return
+        out_rate, channels = self._format(rate)
+        if out_rate != rate:
+            audio, rate = _resample(audio, rate, out_rate), out_rate
+        stream = self._open(rate, channels)
+        try:
+            stream.write(np.zeros((int(rate * self.lead_in), channels), np.int16))
+            self._play(stream, audio, rate, on_level, should_stop)
+        finally:
+            self._close(stream)
+            on_level(0.0)
+
+    def _open(self, rate, channels=1):
+        self.channels = channels
+        stream = sd.OutputStream(samplerate=rate, channels=channels, dtype="int16", device=self.device,
+                                 blocksize=max(1, int(rate * self.BLOCK_S)), latency=self.latency)
+        stream.start()
+        return stream
+
+    def _close(self, stream):
+        try:
+            time.sleep(stream.latency or 0)   # let the buffered tail play out
+            stream.stop()
+            stream.close()
+        except Exception:
+            pass
+
+    def _play(self, stream, audio, rate, on_level, should_stop):
         block = max(1, int(rate * self.BLOCK_S))
         n_blocks = int(np.ceil(len(audio) / block))
         padded = np.zeros(n_blocks * block, np.int16)
@@ -340,19 +554,16 @@ class Speaker:
         rms = np.sqrt(np.mean(blocks.astype(np.float32) ** 2, axis=1))
         ref = max(np.percentile(rms, 90), 1.0)
         levels = np.clip(rms / ref, 0, 1) ** 0.6
-        self.mic.mute_for(len(audio) / rate + 0.4)   # don't listen to ourselves
-        with sd.OutputStream(samplerate=rate, channels=1, dtype="int16", device=self.device,
-                             blocksize=block, latency="low") as stream:
-            delay = int(round((stream.latency or 0) / self.BLOCK_S))  # blocks written but not yet heard
-            for i in range(n_blocks):
-                if should_stop():
-                    break
-                stream.write(blocks[i])
-                on_level(float(levels[i - delay]) if i >= delay else 0.0)
-            for i in range(max(0, n_blocks - delay), n_blocks):
-                on_level(float(levels[i]))
-                time.sleep(self.BLOCK_S)
-        on_level(0.0)
+        self.mic.mute_for(len(audio) / rate + (stream.latency or 0) + 0.6)   # don't listen to ourselves
+        delay = int(round((stream.latency or 0) / self.BLOCK_S))  # blocks written but not yet heard
+        for i in range(n_blocks):
+            if should_stop():
+                break
+            out = blocks[i]
+            if Speaker.volume != 1.0:
+                out = np.clip(out.astype(np.float32) * Speaker.volume, -32768, 32767).astype(np.int16)
+            stream.write(out if self.channels == 1 else np.repeat(out[:, None], self.channels, axis=1))
+            on_level(float(levels[i - delay]) if i >= delay else 0.0)
 
     def _mime(self, sentence, on_level, should_stop):
         """No audio available: move the mouth at a speaking pace so the face still 'talks'."""

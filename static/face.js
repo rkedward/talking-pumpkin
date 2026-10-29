@@ -5,6 +5,32 @@ const TAU = Math.PI * 2;
 const lerp = (a, b, t) => a + (b - a) * t;
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
+// Expressions as targets for the face's "muscles". The face eases from one to the next, so changes look natural.
+//  brow: brows up (+) / down (-)       browTilt: inner ends up (+, worried/sad) / down (-, sly/cross)
+//  browAsym: one brow up, one down     eye: eye size        cheek: cheeks push the eyes into happy crescents
+//  lidTilt: angled upper lids (sly)    lid: extra droop     smile: mouth corners up (+) / down (-)
+//  round: "O" mouth                    smirk: lopsided mouth  pupil: pupil size
+//  look: [x, y] gaze offset            tilt: head tilt (radians)  lean: head scale (leaning in)
+const BASE = { brow: 0, browTilt: 0, browAsym: 0, eye: 1, cheek: 0, lidTilt: 0, lid: 0, smile: 0.35, round: 0,
+               smirk: 0, pupil: 1, lookX: 0, lookY: 0, tilt: 0, lean: 1 };
+export const EXPRESSIONS = {
+  neutral: {},
+  happy: { brow: 0.3, cheek: 0.35, smile: 0.85 },
+  excited: { brow: 0.85, eye: 1.12, cheek: 0.2, smile: 1, pupil: 1.12, lean: 1.03 },
+  laughing: { brow: 0.6, cheek: 1, smile: 1 },
+  surprised: { brow: 1, eye: 1.2, smile: 0, round: 1, pupil: 0.72, lean: 1.04 },
+  curious: { brow: 0.35, browAsym: 0.8, tilt: 0.12, smile: 0.25, eye: 1.05 },
+  thinking: { brow: 0.15, browAsym: 0.55, browTilt: -0.15, lookX: 0.55, lookY: -0.75, smile: 0.1, smirk: 0.7,
+              tilt: -0.06 },
+  sly: { brow: -0.2, browTilt: -0.8, lid: 0.18, lidTilt: 0.6, smile: 0.6, smirk: 0.8, pupil: 0.85, tilt: 0.05 },
+  sad: { brow: 0.1, browTilt: 0.85, eye: 0.95, lid: 0.22, smile: -0.7, lookY: 0.35, tilt: -0.08 },
+  spooky: { brow: -0.4, browTilt: -0.9, lid: 0.25, lidTilt: 0.4, smile: 0.45, pupil: 0.7, lean: 1.05 },
+  proud: { brow: 0.45, cheek: 0.25, smile: 0.75, lid: 0.15, tilt: -0.07 },
+  listening: { brow: 0.45, eye: 1.05, smile: 0.45, tilt: 0.1, lean: 1.03 },
+  sleepy: { brow: -0.4, smile: 0.2 },
+};
+EXPRESSIONS.quizzical = EXPRESSIONS.curious;
+
 export class PumpkinFace {
   constructor(canvas) {
     this.canvas = canvas;
@@ -27,6 +53,14 @@ export class PumpkinFace {
     this.vis = 1;
     this.squint = 0; // 0..1, cheeks pushing the eyes into happy crescents while laughing
     this.wander = { x: 0, y: 0, next: 0 };
+    this.ex = { ...BASE };           // current blend of all expression "muscles"
+    this.mood = "neutral";           // the feeling of the whole reply (from the brain)
+    this.accent = null;              // a short expression for one sentence: { name, until }
+    this.state = "idle";             // idle | greeting | listening | hearing | thinking | speaking
+    this.browFlash = 0;              // brows pop up on loud, stressed words
+    this.nod = 0;                    // 0..1 nod in progress
+    this.nextNod = 0;
+    this.lastMouth = 0;
     this.calib = defaultCalibration(); // the brain stores it and sends it, so a phone can adjust the projector view
     this.showGuide = false;
     this.resize();
@@ -46,6 +80,23 @@ export class PumpkinFace {
   surprise(ms = 900) { this.surpriseUntil = performance.now() + ms; }
   laugh(ms = 1500) { this.laughUntil = performance.now() + ms; }
   setVisible(on) { this.visible = on; }
+  setMood(name) { this.mood = EXPRESSIONS[name] ? name : "neutral"; }
+  setAccent(name, ms = 1500) { if (EXPRESSIONS[name]) this.accent = { name, until: performance.now() + ms }; }
+  setState(state) {
+    if (state !== this.state && (state === "speaking" || state === "listening")) this.nod = 1;   // a little nod
+    this.state = state;
+  }
+
+  // Which expression to show right now.
+  target(now) {
+    if (!this.awake) return "sleepy";
+    if (now < this.surpriseUntil) return "surprised";
+    if (now < this.laughUntil) return "laughing";
+    if (this.state === "thinking") return "thinking";
+    if (this.state === "listening" || this.state === "hearing") return "listening";
+    if (this.accent && now < this.accent.until) return this.accent.name;
+    return this.mood;
+  }
 
   adjust(key) {
     const c = this.calib;
@@ -73,9 +124,20 @@ export class PumpkinFace {
       }
       tx = this.wander.x; ty = this.wander.y;
     }
+    // Expression: ease every "muscle" toward the target expression.
+    const goal = { ...BASE, ...EXPRESSIONS[this.target(now)] };
+    const e = 1 - Math.exp(-dt * 7);
+    for (const k in goal) this.ex[k] = lerp(this.ex[k], goal[k], e);
+    // Thinking eyes drift up and aside; others glance only slightly away from the person.
+    tx += this.ex.lookX; ty += this.ex.lookY;
+
     const g = 1 - Math.exp(-dt * (this.awake ? 9 : 2.5));
     this.gaze.x = lerp(this.gaze.x, clamp(tx, -1, 1), g);
     this.gaze.y = lerp(this.gaze.y, clamp(ty, -1, 1), g);
+
+    // Little nods while someone is talking to it, as if to say "uh-huh".
+    if (this.state === "hearing" && now > this.nextNod) { this.nod = 1; this.nextNod = now + 1100 + Math.random() * 900; }
+    this.nod = Math.max(0, this.nod - dt * 2.2);
 
     // Blinking
     if (now > this.nextBlink) {
@@ -103,6 +165,10 @@ export class PumpkinFace {
     if (now < this.laughUntil) mTarget = Math.max(mTarget, 0.25);   // keep a big open grin while laughing
     this.mouthKick = Math.max(0, this.mouthKick - dt * 5);
     this.mouth = lerp(this.mouth, clamp(mTarget, 0, 1), 1 - Math.exp(-dt * 30));
+    // Stressed, loud words make the brows pop up, like people do when they talk.
+    if (this.mouth > 0.75 && this.lastMouth <= 0.75) this.browFlash = 1;
+    this.lastMouth = this.mouth;
+    this.browFlash = Math.max(0, this.browFlash - dt * 3);
   }
 
   draw(now) {
@@ -127,7 +193,17 @@ export class PumpkinFace {
 
     // Laughing: the whole face bounces with each "ho!"
     if (this.squint > 0.01) ctx.translate(0, -Math.abs(Math.sin(t * 13)) * 16 * this.squint);
+    // Head motion: a slow, breathing sway, the expression's tilt, a bob with the voice and the odd nod.
+    const ex = this.ex;
+    const sway = this.awake ? 0.018 * Math.sin(t * 0.7) + 0.008 * Math.sin(t * 1.9 + 1) : 0.01 * Math.sin(t * 0.4);
+    const nodY = Math.sin(this.nod * Math.PI) * 22;
+    ctx.translate(0, nodY - this.mouth * 10 + 4 * Math.sin(t * 1.3));
+    ctx.rotate(ex.tilt + sway);
+    const breathe = 1 + 0.008 * Math.sin(t * 1.3);
+    ctx.scale(ex.lean * breathe, ex.lean * breathe);
 
+    this.drawBrow(-190, -110, 1, brightness);
+    this.drawBrow(190, -110, -1, brightness);
     this.drawEye(-190, -110, 1, brightness);
     this.drawEye(190, -110, -1, brightness);
     this.drawNose(brightness);
@@ -147,8 +223,8 @@ export class PumpkinFace {
   // side = 1 for the face's right eye (screen left), -1 for its left eye; shapes mirror.
   drawEye(cx, cy, side, brightness) {
     const ctx = this.ctx;
-    const surprised = performance.now() < this.surpriseUntil;
-    const k = surprised ? 1.12 : 1;
+    const ex = this.ex;
+    const k = ex.eye;
     // Rounded triangle, apex tilted toward the nose, classic jack-o'-lantern style.
     const pts = [
       [cx - 105 * k, cy + 62 * k],
@@ -170,7 +246,7 @@ export class PumpkinFace {
     const py = cy + 18 + this.gaze.y * 26;
     ctx.fillStyle = "#000";
     ctx.beginPath();
-    ctx.arc(px, py, surprised ? 26 : 34, 0, TAU);
+    ctx.arc(px, py, 34 * ex.pupil, 0, TAU);
     ctx.fill();
     // Tiny highlight makes the pupil read as an eye from a distance.
     ctx.fillStyle = `rgba(255, 245, 210, ${0.9 * brightness})`;
@@ -180,17 +256,45 @@ export class PumpkinFace {
 
     // Eyelid: black band sliding down from the top.
     const top = cy - 100, bottom = cy + 70;
-    const lid = clamp(this.lid, 0, 1);
+    const lid = clamp(this.lid + ex.lid * (1 - this.lid), 0, 1);
     ctx.fillStyle = "#000";
-    if (lid > 0.01) {
-      ctx.fillRect(cx - 140, top - 10, 280, (bottom - top + 10) * lid + 10);
-    }
-    // Laughing: a dark cheek curve rises from below, leaving a happy upside-down-U eye.
-    if (this.squint > 0.01) {
+    // Upper lid: a black band sliding down, angled (inner end lower) for a sly or spooky look.
+    const lidY = top - 10 + (bottom - top + 10) * lid;
+    const slope = ex.lidTilt * 120;   // how much lower the inner corner sits
+    ctx.beginPath();
+    ctx.moveTo(cx - 150, top - 20);
+    ctx.lineTo(cx + 150, top - 20);
+    ctx.lineTo(cx + 150, lidY + (side < 0 ? slope : 0));
+    ctx.lineTo(cx - 150, lidY + (side > 0 ? slope : 0));
+    ctx.closePath();
+    ctx.fill();
+    // Cheeks: a dark curve rising from below leaves a happy upside-down-U eye (smiling, laughing).
+    const cheek = Math.max(this.squint, ex.cheek);
+    if (cheek > 0.01) {
       ctx.beginPath();
-      ctx.ellipse(cx, bottom + 40, 150, 40 + 80 * this.squint, 0, 0, TAU);
+      ctx.ellipse(cx, bottom + 40, 150, 40 + 80 * cheek, 0, 0, TAU);
       ctx.fill();
     }
+    ctx.restore();
+  }
+
+  // Carved brows: a glowing slit above each eye that rises, tilts and pops with the expression.
+  drawBrow(cx, cy, side, brightness) {
+    const ctx = this.ctx, ex = this.ex;
+    const up = (ex.brow + 0.45 * this.browFlash + (side > 0 ? ex.browAsym : -ex.browAsym * 0.4)) * 38;
+    const inner = ex.browTilt * 55;               // inner end (toward the nose) raised by this much
+    const y = cy - 158 - up;
+    const xi = cx + side * 70, xo = cx - side * 95;   // inner and outer ends
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineWidth = 22;
+    ctx.shadowColor = "rgba(255, 120, 0, 0.9)";
+    ctx.shadowBlur = 35;
+    ctx.strokeStyle = this.glow(cx, y, 120, brightness * 0.9);
+    ctx.beginPath();
+    ctx.moveTo(xo, y + 14);
+    ctx.quadraticCurveTo(cx, y - 18 - inner * 0.5, xi, y + 6 - inner);
+    ctx.stroke();
     ctx.restore();
   }
 
@@ -207,20 +311,25 @@ export class PumpkinFace {
   }
 
   drawMouth(brightness) {
-    const ctx = this.ctx;
+    const ctx = this.ctx, ex = this.ex;
     const open = this.mouth;
-    const W = 290, cornerY = 110;
-    const upperC = 215 - open * 25;            // control point y of the upper lip curve
-    const lowerC = 255 + open * 190;           // control point y of the lower lip curve
-    const curveY = (x, c) => {                 // quadratic with symmetric endpoints: x is linear in t
+    const W = 290 * (1 - 0.5 * ex.round) * (1 - 0.15 * Math.abs(ex.smirk));
+    // Corners rise for a smile and drop for a frown; a smirk lifts one side.
+    const lift = (ex.smile - 0.35) * 70;
+    const yL = 110 - lift - ex.smirk * 35, yR = 110 - lift + ex.smirk * 25;
+    const frown = Math.max(0, -ex.smile);     // a frown bends both lips upward into an arch
+    const upperC = 215 - open * 25 - ex.round * 60 - frown * 160;
+    const lowerC = Math.max(upperC + 20 + open * 150, 255 + open * 190 + ex.round * 90 - frown * 200);
+    const curveY = (x, c) => {                 // quadratic with control at x=0: x is linear in t
       const t = (x + W) / (2 * W);
-      return (1 - t) ** 2 * cornerY + 2 * t * (1 - t) * c + t * t * cornerY;
+      return (1 - t) ** 2 * yL + 2 * t * (1 - t) * c + t * t * yR;
     };
     ctx.save();
+    ctx.translate(ex.smirk * 40, 0);
     ctx.beginPath();
-    ctx.moveTo(-W, cornerY);
-    ctx.quadraticCurveTo(0, upperC, W, cornerY);
-    ctx.quadraticCurveTo(0, lowerC, -W, cornerY);
+    ctx.moveTo(-W, yL);
+    ctx.quadraticCurveTo(0, upperC, W, yR);
+    ctx.quadraticCurveTo(0, lowerC, -W, yL);
     ctx.closePath();
     ctx.shadowColor = "rgba(255, 120, 0, 0.9)";
     ctx.shadowBlur = 50;
@@ -231,11 +340,12 @@ export class PumpkinFace {
 
     // Teeth are uncarved pumpkin, so they're black blocks inside the glowing mouth.
     ctx.fillStyle = "#000";
-    for (const [x0, x1] of [[-150, -95], [70, 125]]) {     // upper teeth hang down
+    const sx = W / 290;
+    for (const [x0, x1] of [[-150 * sx, -95 * sx], [70 * sx, 125 * sx]]) {     // upper teeth hang down
       const y = Math.min(curveY(x0, upperC), curveY(x1, upperC));
       ctx.fillRect(x0, y - 20, x1 - x0, 20 + 46);
     }
-    for (const [x0, x1] of [[-40, 15]]) {                   // lower tooth sticks up
+    for (const [x0, x1] of [[-40 * sx, 15 * sx]]) {                             // lower tooth sticks up
       const y = Math.max(curveY(x0, lowerC), curveY(x1, lowerC));
       ctx.fillRect(x0, y - 48, x1 - x0, 48 + 20);
     }

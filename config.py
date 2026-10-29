@@ -9,9 +9,16 @@ ROOT = Path(__file__).resolve().parent
 
 DEFAULTS = {
     "claude": {
-        "model": "claude-opus-5-5",   # claude-haiku-4-5 answers faster
+        "model": "claude-opus-5-5",   # claude-haiku-5-5 answers faster
         "effort": "low",
         "fake": False,                # canned replies, no API calls (PUMPKIN_FAKE=1 also works)
+        "laugh": True,                # false = the pumpkin never says "Ha ha ha!"
+        "laugh_text": "Ha ha ha!",
+        "song_game": True,            # offer the "guess the song" game
+        "song_source": "auto",        # auto: real song clips (run fetch_songs.py once) plus music box | real | musicbox    # how it laughs, e.g. "Ho ho ho!"
+        "provider": "auto",           # claude | openai | auto (Claude if ANTHROPIC_API_KEY is set, else OpenAI)
+        "openai_model": "gpt-5-mini", # used when the provider is openai
+        "openai_reasoning": "minimal",  # quick answers; "" to leave it to the model
     },
     "camera": {
         "source": "auto",             # auto | picamera | usb | file:/path/to/video.mp4
@@ -34,6 +41,8 @@ DEFAULTS = {
         "gone_s": 3.5,                # nobody seen this long = visit over
         "max_turns": 5,
         "max_visit_s": 90,
+        "game_extra_turns": 4,        # a visit that plays the song game gets this many more turns ...
+        "game_extra_s": 60,           # ... and this much more time
         "listen_s": 8,                # how long to wait for each question
         "regreet_s": 12,
     },
@@ -53,11 +62,24 @@ DEFAULTS = {
         "threads": 4,
     },
     "tts": {
-        "engine": "piper",            # piper | elevenlabs | espeak | none
+        "engine": "piper",            # piper | openai | elevenlabs | espeak | none
         "output_device": "",          # part of the output device name; empty = default
+        "sentence_pause": 0.35,       # seconds of silence after each sentence
+        "question_pause": 1.0,        # seconds of silence after a question
+        "output_latency": 0.25,       # speaker buffer, seconds: raise (0.4) if speech is choppy, lower for tighter lip sync
         "piper_voice": "models/voices/en_US-ryan-medium.onnx",
-        "piper_length_scale": 1.05,   # >1 is slower
+        "piper_length_scale": 1.15,   # >1 is slower
         "pitch_semitones": -2.0,      # deepen the voice a little (piper/espeak); 0 = off
+        "openai_voice": "cedar",      # cedar, marin, ash, ballad, coral, echo, fable, onyx, sage, verse ...
+        "openai_model": "gpt-4o-mini-tts",
+        "openai_instructions": "You are Jack, a jolly, theatrical talking jack-o'-lantern on a porch on Halloween "
+                               "night. Sound delighted and full of energy, like a big, bubbly, larger-than-life "
+                               "uncle who can't stop smiling. Speak at a brisk, lively pace with a bright, "
+                               "bouncy tone. Words like 'Ha ha ha' are laughter: never read them out as "
+                               "words, actually laugh out loud, a big, breathy, rolling belly laugh that "
+                               "bubbles up naturally from the joke before it.",
+        "laugh_dir": "sounds/laughs", # .wav laugh recordings: played instead of a spoken "Ha ha ha!" when present
+        "openai_speed": 1.1,          # 1.0 = normal; up to about 1.25 before it sounds rushed
         "elevenlabs_voice_id": "",
         "elevenlabs_model": "eleven_flash_v2_5",
         "espeak_voice": "en-us+m3",
@@ -117,6 +139,7 @@ DEFAULTS = {
         "host": "127.0.0.1",          # 0.0.0.0 lets a phone on your Wi-Fi open the debug panel / remote
                                       # (switched on automatically for Wi-Fi window projectors and home automation)
         "port": 8000,
+        "debug_screen": "auto",       # camera debug view on a small DSI screen: "auto", an output like "DSI-1", or "off"
     },
 }
 
@@ -149,8 +172,14 @@ def load(path=None):
             _merge(cfg, tomllib.load(f))
     if os.environ.get("PUMPKIN_FAKE") == "1":
         cfg["claude"]["fake"] = True
+    brain = cfg["claude"]
+    if brain["provider"] == "auto":
+        has_openai = os.environ.get("OPENAI_API_KEY") and not os.environ.get("ANTHROPIC_API_KEY")
+        brain["provider"] = "openai" if has_openai else "claude"
+    if brain["provider"] == "openai":
+        brain["model"] = brain["openai_model"]
     if os.environ.get("PUMPKIN_MODEL"):
-        cfg["claude"]["model"] = os.environ["PUMPKIN_MODEL"]
+        brain["model"] = brain["openai_model"] = os.environ["PUMPKIN_MODEL"]
     if os.environ.get("PUMPKIN_PORT"):
         cfg["web"]["port"] = int(os.environ["PUMPKIN_PORT"])
     return cfg

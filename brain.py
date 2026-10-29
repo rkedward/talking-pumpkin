@@ -1,23 +1,44 @@
-"""Claude: costume recognition, greeting and Q&A. Holds per-visit conversation history."""
+"""The pumpkin's brain (Claude or OpenAI): costume recognition, greeting and Q&A. Holds per-visit
+conversation history."""
 
 import json
+import os
 import random
+import re
 import threading
 import time
+import urllib.error
+import urllib.request
 import uuid
+
+import tunes
 
 SESSION_TTL = 15 * 60
 MODEL = "claude-opus-5-5"
 EFFORT = "low"
 FAKE = False
+LAUGH = True             # [claude] laugh: false = no "Ha ha ha!" lines at all
+LAUGH_TEXT = "Ha ha ha!" # [claude] laugh_text: how the pumpkin writes its laugh
+GAME = True              # [claude] song_game: offer the "guess the song" game
+PROVIDER = "claude"      # claude | openai
+OPENAI_MODEL = "gpt-5-mini"
+OPENAI_REASONING = "minimal"
 CREATURES = []          # [{"name": ..., "description": ..., "windows": [...]}] that can appear in a window
 WINDOWS = {}            # window name -> where it is, as the pumpkin tells kids ("the front door window behind you")
 ONLINE = lambda: list(WINDOWS)   # windows whose projector is switched on right now
 
 
 def configure(cfg, creatures=(), windows=None, online=None):
-    global MODEL, EFFORT, FAKE, CREATURES, WINDOWS, ONLINE
+    global MODEL, EFFORT, FAKE, CREATURES, WINDOWS, ONLINE, PROVIDER, OPENAI_MODEL, OPENAI_REASONING
     MODEL, EFFORT, FAKE = cfg["model"], cfg["effort"], bool(cfg["fake"])
+    PROVIDER = cfg.get("provider", "claude")
+    global LAUGH
+    LAUGH = bool(cfg.get("laugh", True))
+    global LAUGH_TEXT, GAME
+    GAME = bool(cfg.get("song_game", True))
+    tunes.SOURCE = cfg.get("song_source", "auto")
+    LAUGH_TEXT = cfg.get("laugh_text") or LAUGH_TEXT
+    OPENAI_MODEL, OPENAI_REASONING = cfg.get("openai_model", OPENAI_MODEL), cfg.get("openai_reasoning", "")
     CREATURES, WINDOWS = list(creatures), dict(windows or {})
     ONLINE = online or (lambda: list(WINDOWS))
 
@@ -71,9 +92,18 @@ the best costume, telling a joke, doing a silly trick), and banter with them. Yo
 - Leave "summon" and "creature_says" empty when not using them.{extra}"""
 
 
+MOODS = ["happy", "excited", "surprised", "curious", "thinking", "sly", "sad", "spooky", "proud"]
+
+
 def output_schema(with_costumes):
-    props = {"say": {"type": "string", "description": "Exactly what the pumpkin says aloud."}}
-    required = ["say"]
+    props = {"say": {"type": "string", "description": "Exactly what the pumpkin says aloud."},
+             "mood": {"type": "string", "enum": MOODS,
+                      "description": "The feeling your face shows while you say it."}}
+    required = ["say", "mood"]
+    if GAME and not with_costumes:
+        props["play_song"] = {"type": "string", "enum": [""] + list(tunes.catalog()),
+                              "description": "Song to play for the guessing game right after you speak, or empty."}
+        required.append("play_song")
     if with_costumes:
         props = {"costumes": {"type": "array", "items": {"type": "string"},
                               "description": "Short description of each costume seen, e.g. 'witch with a green hat'."},
@@ -102,9 +132,7 @@ Trick-or-treaters (often young kids, sometimes teens and parents) walk up to you
 spoken aloud by a text-to-speech voice, so:
 - Write plain spoken sentences only. No emoji, stage directions, asterisks, lists, or markdown.
 - Keep it short: one to three sentences, under about 45 words.
-- You are JOLLY: big-hearted, bubbly and silly, and you crack yourself up. After a joke or pun, laugh at it
-  as its own short sentence written out in words, like "Ho ho ho!", "Hee hee hee!" or "Ha ha ha!" (vary it,
-  never "*laughs*"). You can chuckle at a funny costume or question too.
+- You are JOLLY: big-hearted, bubbly and silly, and you crack yourself up.{laugh}
 - Fun, not scary: with little kids or mixed groups be cozy and goofy. "Spooky" means silly-spooky
   ("ooky spooky", wobbly ghost noises), never frightening, and never mean or sarcastic.
 - If the group is clearly all teenagers (no little kids with them), you may be spookier: dramatic,
@@ -114,19 +142,89 @@ spoken aloud by a text-to-speech voice, so:
 - Talk about costumes only, never about anyone's body, face, weight, skin, age guess, or other personal traits.
 - Never ask for names, addresses, school, or other personal information. If a kid offers their name, you may use it.
 - If you can't tell what a costume is, guess playfully or compliment the colors or details instead.
+- What you see comes through your own pumpkin eyes. Never mention a camera, photo, picture, image or screen.
+- Your face is animated: pick the "mood" that fits what you're saying (excited for a great costume, curious
+  when you ask something, sly before a punchline, sad-but-silly when they have to leave, spooky for a spooky bit).
+  Vary it; don't stay on "happy" all the time.
 - Stay in character as a pumpkin. If asked if you're real, have fun with it ("as real as a pumpkin can be!").
 - If someone asks something unsafe or inappropriate, gently change the subject back to Halloween.
 - Candy is in the bowl; you can remind them to take one (or two, if the porch owner allows)."""
+
+LAUGH_ON = """ After a joke or pun, laugh at it
+  as its own short sentence written out in words: "{laugh_text}" (always that laugh, never "*laughs*").
+  You can chuckle at a funny costume or question too."""
+LAUGH_OFF = """ Show it in your words and delight, but never
+  write out laughter ("ha ha", "ho ho", "hee hee") or "*laughs*"."""
+LAUGH_RE = re.compile(r"^\W*((ha|ho|hee|he|heh|hah|mwa|mwah)\W*)+$", re.I)
+
+_LAUGH_WORD = r"(?:(?:ha|ho|hee|heh|hah)\b[\s,\-]*){2,}|(?:ha(?:ha)+|he(?:he)+|ho(?:ho)+|heehee|mwa(?:ha)+)\b[\s,\-]*"
+LEAD_LAUGH = re.compile(r"^(?:" + _LAUGH_WORD + r")+", re.I)
+MID_LAUGH = re.compile(r",\s*(?:(?:ha|hee|heh|hah)\b[\s,\-]*)+,\s*", re.I)          # "I mean, ha, I'm ..."
+LEAD_ONE_LAUGH = re.compile(r"^(?:(?:ha|hee|heh|hah)\b\s*[,\-]\s*)+", re.I)             # "Ha, nice hat!"
+TRAIL_LAUGH = re.compile(r"[\s,\-]+(?:" + _LAUGH_WORD + r")+([.!?]*)$", re.I)
+
+
+def game_prompt():
+    if not GAME:
+        return ""
+    cat = tunes.catalog()
+    kinds = []
+    for kind, ids in tunes.kinds().items():
+        listed = ", ".join(f"{sid} ({cat[sid]['title']}{', teens only' if cat[sid]['teens'] else ''})" for sid in ids)
+        kinds.append(f"- {kind}: {listed}")
+    songs = "\n".join(kinds)
+    return f"""
+
+Guess-the-song game: you can play a few seconds of a song and the trick-or-treaters guess it.
+- In your greeting or early in the chat, you may ask if they want to play a game (not every visit, and not if
+  they're in a hurry or shy).
+- Pick songs that suit the group: little kids get kids' songs, nursery rhymes, movie and video game songs and
+  the friendlier Halloween ones; older kids, teens and grown-ups can get anything. Songs marked "teens only" are never for little
+  kids. You can ask which kind they'd like to hear ({", ".join(tunes.kinds())}).
+- When they say yes (or ask to play), say something short like "Listen closely!" in "say" and set
+  "play_song" to a song id; the tune plays right after you speak. Play a song only once per round: while they're
+  guessing, leave "play_song" empty (unless they ask to hear it again; then use the same id). Never say the title before they guess.
+- On their guess: cheer if they're right. Naming the song, the movie or the character who sings it all count
+  (close enough counts too). If not, give a fun hint (what the song is about,
+  which movie it's from, or something about the princess, like "she has really long hair") and let them guess
+  again. After two wrong guesses, tell them the answer kindly.
+- One song per visit: after the round, don't offer another song; wish them a happy Halloween instead. Leave "play_song" empty otherwise.
+Songs you can play, by kind:
+{songs}"""
+
+
+def persona():
+    laugh = LAUGH_ON.replace("{laugh_text}", LAUGH_TEXT) if LAUGH else LAUGH_OFF
+    return PERSONA.replace("{laugh}", laugh) + sideshow_prompt() + game_prompt()
+
+
+def _no_laughs(text):
+    """Drop written-out laughter (a "Ha ha!" sentence) when laughing is switched off."""
+    if LAUGH or not text:
+        return text
+    kept = []
+    for part in re.findall(r"[^.!?]+[.!?]*", text):
+        part = part.strip()
+        if LAUGH_RE.match(part):
+            continue
+        part = MID_LAUGH.sub(", ", part)
+        part = LEAD_ONE_LAUGH.sub("", LEAD_LAUGH.sub("", part))          # "Hee hee, I'm a great host!" -> "I'm a great host!"
+        part = TRAIL_LAUGH.sub(r"\1", part)       # "What fun, ha ha!" -> "What fun!"
+        if part:
+            kept.append(part[0].upper() + part[1:])
+    return " ".join(kept) or text
+
 
 GREET_INSTRUCTIONS = """Trick-or-treaters just walked up. This snapshot is from the camera next to you ({people} {noun} detected).
 Identify each visible costume and whether this group is "kids" (any little kids, or you can't tell) or
 "teens" (clearly all teenagers or grown-ups), then write what you say out loud: greet them, compliment the
 costume(s) specifically, tell one short joke or pun based on a costume, and laugh at your own joke. For a group, mention a couple of costumes
-rather than listing everyone. If nobody is visible or the image is unclear, greet them warmly anyway."""
+rather than listing everyone. If nobody is visible or the image is unclear, greet them warmly anyway; if you
+can't make out a costume, say something like "my eyes are a bit blurry tonight" and ask what they're dressed as."""
 
 FAKE_GREETINGS = [
     ("a mystery costume", "Well hello there, mysterious visitor! What a fang-tastic costume. "
-     "Why didn't the skeleton go trick-or-treating? It had no body to go with! Ho ho ho!"),
+     "Why didn't the skeleton go trick-or-treating? It had no body to go with! Ha ha ha!"),
     ("a witch", "Greetings, young witch! Your hat is spell-binding. "
      "Why do witches fly on brooms? Because vacuum cleaners have cords! Hee hee hee!"),
 ]
@@ -136,7 +234,7 @@ FAKE_ANSWERS = [
     "My favorite candy? Anything orange, of course. Take one from the bowl!",
 ]
 
-FALLBACK_SAY = "Happy Halloween! I love your costume. Grab some candy! Ho ho ho!"
+FALLBACK_SAY = "Happy Halloween! I love your costume. Grab some candy! Ha ha ha!"
 
 _sessions = {}
 _lock = threading.Lock()
@@ -152,8 +250,60 @@ def client():
     return _client
 
 
+_NO_REASONING = set()   # OpenAI models that rejected reasoning_effort
+
+
+def call_openai(messages, schema=None):
+    """One OpenAI Chat Completions request with the same messages (Claude's format is converted)."""
+    def convert(content):
+        if isinstance(content, str):
+            return content
+        out = []
+        for block in content:
+            if block["type"] == "image":
+                src = block["source"]
+                out.append({"type": "image_url",
+                            "image_url": {"url": f"data:{src['media_type']};base64,{src['data']}"}})
+            else:
+                out.append({"type": "text", "text": block["text"]})
+        return out
+
+    body = {"model": OPENAI_MODEL, "max_completion_tokens": 2000,
+            "messages": [{"role": "system", "content": persona()}]
+                        + [{"role": m["role"], "content": convert(m["content"])} for m in messages]}
+    if schema:
+        body["response_format"] = {"type": "json_schema",
+                                   "json_schema": {"name": "pumpkin_reply", "strict": True, "schema": schema}}
+    if OPENAI_REASONING and OPENAI_MODEL not in _NO_REASONING:
+        body["reasoning_effort"] = OPENAI_REASONING
+
+    def post(b):
+        req = urllib.request.Request("https://api.openai.com/v1/chat/completions", data=json.dumps(b).encode(),
+                                     headers={"Authorization": f"Bearer {os.environ.get('OPENAI_API_KEY', '')}",
+                                              "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return json.loads(r.read())
+
+    try:
+        data = post(body)
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode(errors="replace")
+        if exc.code == 400 and "reasoning" in detail and "reasoning_effort" in body:
+            _NO_REASONING.add(OPENAI_MODEL)          # the chosen model doesn't take this setting; stop sending it
+            body.pop("reasoning_effort")
+            data = post(body)
+        else:
+            raise RuntimeError(f"OpenAI {exc.code}: {detail[:300]}") from None
+    message = data["choices"][0]["message"]
+    if message.get("refusal"):
+        return None
+    return (message.get("content") or "").strip() or None
+
+
 def call_claude(messages, schema=None):
-    """One Claude request. Returns the response's final text (or None on refusal)."""
+    """One brain request. Returns the response's final text (or None on refusal)."""
+    if PROVIDER == "openai":
+        return call_openai(messages, schema)
     kwargs = {}
     if schema:
         kwargs["output_config"] = {"effort": EFFORT, "format": {"type": "json_schema", "schema": schema}}
@@ -162,7 +312,7 @@ def call_claude(messages, schema=None):
     response = client().beta.messages.create(
         model=MODEL,
         max_tokens=2000,
-        system=PERSONA + sideshow_prompt(),
+        system=persona(),
         messages=messages,
         # Server-side fallback: if a safety classifier declines, the API retries on a suitable model.
         betas=["server-side-fallback-2026-07-01"],
@@ -196,7 +346,7 @@ def _sideshow_fields(data):
     window = data.get("window") if data.get("window") in WINDOWS else ""
     fly_to = data.get("fly_to") if data.get("fly_to") in WINDOWS else ""
     return {"summon": summon, "window": window, "fly_to": fly_to,
-            "creature_says": (data.get("creature_says") or "").strip()}
+            "creature_says": _no_laughs((data.get("creature_says") or "").strip())}
 
 
 def greet(image_b64, people, note=""):
@@ -224,9 +374,10 @@ def greet(image_b64, people, note=""):
         content.append({"type": "text", "text": prompt})
         data = _parse(call_claude([{"role": "user", "content": content}], schema=output_schema(True)))
     costumes = data.get("costumes") or []
-    say = data.get("say") or FALLBACK_SAY
+    say = _no_laughs(data.get("say") or FALLBACK_SAY)
     audience = "teens" if data.get("audience") == "teens" else "kids"
-    result = {"costumes": costumes, "audience": audience, "say": say, **_sideshow_fields(data)}
+    mood = data.get("mood") if data.get("mood") in MOODS else "happy"
+    result = {"costumes": costumes, "audience": audience, "say": say, "mood": mood, **_sideshow_fields(data)}
 
     # Keep a text-only history; the image isn't re-sent on every question.
     seen = ", ".join(costumes) if costumes else "costumes you couldn't make out"
@@ -251,6 +402,10 @@ def chat(sid, text, on_stage=None):
         with _lock:
             _sessions[sid] = session
     note = f" ({on_stage} is visible right now.)" if on_stage else ""
+    if session.get("song"):
+        title = tunes.catalog().get(session["song"], {}).get("title", session["song"])
+        note += (f" (Game: the song you played this round is {session['song']}: {title}. If this is a guess, judge it"
+                 " against that song; that's the only song for this visit.)")
     history = session["history"] + [{"role": "user", "content": f'The trick-or-treater says: "{text}"{note}'}]
     if FAKE:
         data = {"say": random.choice(FAKE_ANSWERS)}
@@ -258,7 +413,12 @@ def chat(sid, text, on_stage=None):
             data["creature_says"] = "Ooooh, I agree with the pumpkin!"
     else:
         data = _parse(call_claude(history, schema=output_schema(False)))
-    result = {"say": data.get("say") or "Ooh, let's talk about something else. Like candy! Have you picked one yet?",
+    song = data.get("play_song") if data.get("play_song") in tunes.catalog() else ""
+    if song and session.get("song") and (song != session["song"] or "again" not in text.lower()):
+        song = ""   # one song per visit; replay it only if they ask to hear it again
+    if song:
+        session["song"] = song
+    result = {"mood": data.get("mood") if data.get("mood") in MOODS else "happy", "play_song": song, "say": _no_laughs(data.get("say")) or "Ooh, let's talk about something else. Like candy! Have you picked one yet?",
               **_sideshow_fields(data)}
     with _lock:
         session["history"] = history + [{"role": "assistant", "content": json.dumps(result)}]

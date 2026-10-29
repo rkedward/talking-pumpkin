@@ -15,6 +15,7 @@ import threading
 import time
 
 import brain
+import tunes
 import config
 from audio import Listener, Microphone, Speaker, WhisperSTT, make_tts
 from align import Aligner
@@ -97,7 +98,9 @@ class Pumpkin:
         self.log(f"face page on http://localhost:{port}")
         for n in wifi_windows:
             self.log(f"window '{n}': open http://{lan_ip()}:{port}/window.html?w={n} on its projector")
-        self.log("claude: fake mode (canned replies)" if cfg["claude"]["fake"] else f"claude: {cfg['claude']['model']}")
+        self.log("brain: fake mode (canned replies)" if cfg["claude"]["fake"]
+                 else f"brain: {cfg['claude']['provider']} {cfg['claude']['model']}")
+        self.show = None   # set below; the web panel can ask for status while the rest is still loading
         self.props = Props(cfg["props"], self.log)
         self.vision = Vision(cfg["camera"], cfg["detector"], self.log)
         self.doa = ReSpeakerDOA(cfg["doa"], self.log) if cfg["doa"]["enabled"] else None
@@ -110,6 +113,7 @@ class Pumpkin:
                 self.log(f"speech recognition off ({type(exc).__name__}: {exc}); type questions in the debug panel")
         self.listener = Listener(self.mic, cfg["mic"], stt)
         self.speaker = Speaker(make_tts(cfg["tts"], self.log), cfg["tts"], self.mic, self.log)
+        Speaker.volume = float(saved.get("volume", 1.0))
         self.show = None
         if cfg["window"]["enabled"]:
             self.show = SideShow(cfg["window"], cfg["tts"], self.mic, self.hub, self.log)
@@ -132,6 +136,8 @@ class Pumpkin:
         if not text:
             return
         self.log(f"🎃 {text}", "said")
+        before = self.state
+        self.set_state("speaking")
         self.speaking = True
         self.speaker.speak(text, on_level=self._set_mouth,
                            on_sentence=self._on_sentence,
@@ -139,10 +145,33 @@ class Pumpkin:
         self.speaking = False
         self.mouth = 0.0
         self.props.expression("happy" if self.awake else "neutral")
+        if before in ("idle", "cooldown"):
+            self.set_state(before)
+
+    def play_song(self, song_id):
+        """The guessing game's tune; the mouth bobs along as if the pumpkin is humming it."""
+        try:
+            audio, rate = tunes.load(song_id)
+        except Exception as exc:
+            self.log(f"song {song_id}: {exc}")
+            return
+        self.log(f"🎵 {tunes.catalog()[song_id]['title']}", "said")
+        self.speaking = True
+        self.speaker.play_clip(audio, rate, on_level=lambda level: self._set_mouth(level * 0.5),
+                               should_stop=lambda: self.abort_visit)
+        self.speaking = False
+        self.mouth = 0.0
+
+    def mood(self, name):
+        """The feeling of a whole reply, chosen by the brain; the projected face shows it."""
+        self.hub.publish({"t": "mood", "name": name or "happy"})
 
     def _on_sentence(self, sentence):
         expr = self.props.expression_for(sentence)
         self.props.expression(expr)
+        accent = {"quizzical": "curious", "surprised": "excited", "sly": "sly"}.get(expr)
+        if accent:   # this sentence's own look, on top of the reply's mood
+            self.hub.publish({"t": "expr", "name": accent, "ms": int(300 + 330 * len(sentence.split()))})
         if expr == "laughing":   # the face squints and bounces while he laughs at his own joke
             self.hub.publish({"t": "laugh", "ms": int(400 + 280 * len(sentence.split()))})
 
@@ -264,15 +293,17 @@ class Pumpkin:
         if result.get("costumes"):
             self.log(f"costumes: {'; '.join(result['costumes'])}")
         session = result.get("session", "")
+        self.mood(result.get("mood"))
         self.say(result.get("say"))
         self.sideshow(result)
 
         started, turns = time.time(), 0
+        max_turns, max_s, game_on = int(v["max_turns"]), float(v["max_visit_s"]), False
         while not self.abort_visit:
             if not forced and not self.present():
                 self.say(random.choice(GOODBYES))
                 break
-            if turns >= int(v["max_turns"]) or time.time() - started > float(v["max_visit_s"]):
+            if turns >= max_turns or time.time() - started > max_s:
                 self.say(random.choice(WRAPUPS))
                 break
             self.set_state("listening")
@@ -292,8 +323,15 @@ class Pumpkin:
             except Exception as exc:
                 self.log(f"claude error: {type(exc).__name__}: {exc}")
                 reply = {"say": "Ooh, my pumpkin brain went fuzzy. Happy Halloween!"}
+            self.mood(reply.get("mood"))
             self.say(reply["say"])
             self.sideshow(reply)
+            if reply.get("play_song") and not self.abort_visit:
+                if not game_on:   # a game takes a few more turns than a chat
+                    game_on = True
+                    max_turns += int(v["game_extra_turns"])
+                    max_s += float(v["game_extra_s"])
+                self.play_song(reply["play_song"])
             turns += 1
         self.props.visit_over()
         if self.show:
@@ -301,6 +339,7 @@ class Pumpkin:
         self.home.send("visit_end")
         self.reveal(False)
         self.awake = False
+        self.mood("neutral")
         self.props.expression("neutral")
 
     def run(self):
@@ -329,8 +368,35 @@ class Pumpkin:
             time.sleep(2.5)
 
     # ---- web interface -------------------------------------------------------------------------
+    def face_demo(self):
+        """Show off each expression: the pumpkin names it while the face makes it."""
+        was_awake, self.awake = self.awake, True
+        try:
+            for mood in brain.MOODS + ["listening", "laughing"]:
+                if self.abort_visit:
+                    break
+                if mood in ("listening", "thinking"):
+                    self.hub.publish({"t": "state", "state": mood})
+                    self.say(mood.capitalize() + ".")
+                    self.hub.publish({"t": "state", "state": mood})   # saying it switched to "speaking"
+                    time.sleep(2)
+                elif mood == "laughing":
+                    self.hub.publish({"t": "laugh", "ms": 2500})
+                    self.say("Laughing!")
+                    time.sleep(1)
+                else:
+                    self.mood(mood)
+                    self.say(mood.capitalize() + "!")
+                    time.sleep(1.5)
+        finally:
+            self.hub.publish({"t": "state", "state": self.state})
+            self.mood("neutral")
+            self.awake = was_awake
+
     def command(self, name, data):
-        if name == "greet":
+        if name == "faces":
+            threading.Thread(target=self.face_demo, daemon=True).start()
+        elif name == "greet":
             self.force_greet = True
             self.log("manual greet")
         elif name == "end":
@@ -397,6 +463,13 @@ class Pumpkin:
         elif name == "guide":
             self.guide = not self.guide
             self.hub.publish({"t": "guide", "on": self.guide})
+        elif name == "volume":
+            try:
+                Speaker.volume = min(1.5, max(0.0, float(data.get("percent", 100)) / 100))
+            except (TypeError, ValueError):
+                return {"error": "percent must be a number"}
+            self._save()
+            self.log(f"volume {round(Speaker.volume * 100)}%")
         elif name == "mute":
             self.mic.user_muted = not self.mic.user_muted
             self.log(f"mic {'muted' if self.mic.user_muted else 'on'}")
@@ -507,13 +580,17 @@ class Pumpkin:
 
     def _save(self):
         STATE_FILE.write_text(json.dumps({"gaze_flip": self.gaze_flip, "calib": self.calib, "face_warp": self.face_warp,
-                                          "window_calib": self.window_calib}))
+                                          "window_calib": self.window_calib,
+                                          "volume": Speaker.volume}))
 
     def status(self):
+        if not hasattr(self, "listener"):   # the debug panel can ask while the camera and mic are still starting
+            return {"state": "starting", "people": 0, "volume": round(Speaker.volume * 100)}
         people, _, _, _ = self.vision.state()
         st = {"state": self.state, "people": len(people), "detect_ms": round(self.vision.detect_ms),
               "fake": self.cfg["claude"]["fake"], "model": self.cfg["claude"]["model"],
               "mic_muted": self.mic.user_muted,
+              "volume": round(Speaker.volume * 100),
               "creature": (self.show.on_stage or {}).get("name") if self.show else None,
               "creature_window": self.show.screen if self.show else None,
               "windows": list(self.screens) if self.show else [],
@@ -524,6 +601,8 @@ class Pumpkin:
         return st
 
     def debug_jpeg(self):
+        if not hasattr(self, "listener"):
+            return None
         return self.vision.debug_jpeg(self.doa.bearing(max_age=1.5) if self.doa and self.doa.available else None)
 
 
