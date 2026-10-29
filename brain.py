@@ -234,8 +234,8 @@ LOOK_PROMPT = """
 Your eyes: you notice visitors by hearing them (a "trick or treat", a knock, the doorbell). You only see them
 when you take a look: one when they arrive, and another whenever you set "look" to true. If you couldn't see
 anyone, or a costume was hidden or blurry, ask them to step right in front of you ("Come closer, let me see that
-costume!") and set "look" to true; you'll get a fresh look right after you speak. Don't ask more than twice
-in a visit; if you still can't see them, just ask what they're dressed as."""
+costume!") and set "look" to true; you'll get a fresh look right after you speak. Ask only once in a visit;
+if you still can't see them, stop talking about seeing them and just chat (ask what they're dressed as)."""
 
 
 def persona():
@@ -561,9 +561,14 @@ def chat(sid, text, on_stage=None, cut_off=None, on_say=None, on_mood=None, imag
         note += (" (This is your last reply of the visit: answer, then say a warm goodbye and remind them to take"
                  " candy. Don't ask a question or promise anything more.)")
     if text is None:   # no words: the fresh look he asked for
-        said = (f"(You take a fresh look: {people} {'person' if people == 1 else 'people'} in view. React to what "
-                "you see now: compliment the costumes you can make out. If nobody is in view, just say you still "
-                "can't see them; never describe darkness, blur or shapes.)" + note)
+        if people:
+            said = (f"(You take a fresh look: {people} {'person' if people == 1 else 'people'} in view. React to "
+                    "what you see now: compliment the costumes you can make out; never describe darkness, blur or "
+                    "shapes.)" + note)
+        else:
+            said = ("(You take a fresh look and still can't see anyone. Don't mention seeing, looking or your eyes "
+                    "again this visit, and don't set look again: ask what they're dressed as and keep chatting.)"
+                    + note)
     else:
         said = f'The trick-or-treater says: "{text}"{note}'
     history = session["history"] + [{"role": "user", "content": said}]

@@ -508,7 +508,7 @@ class Pumpkin:
                 self.say(random.choice(WRAPUPS))
                 break
             image, seen = None, 0
-            if pending_look and looks < 2:   # he asked them to step into view: take a fresh look
+            if pending_look and looks < 1:   # he asked them to step into view: take one fresh look
                 pending_look, looks = False, looks + 1
                 self.set_state("thinking")
                 seen, image = self.look_for_people()
