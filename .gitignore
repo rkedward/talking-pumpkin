@@ -7,3 +7,5 @@ models/*
 sounds/songs/
 sounds/laughs/*.wav
 static/echotest.wav
+static/atmos/
+*.s16

@@ -52,7 +52,7 @@ DEFAULTS = {
         # person detection starts the visit, the eyes follow people, and the visit ends when they walk away.
         "trigger": "sound",
         "wake_words": ["trick or treat", "treat", "hello", "hi", "hey", "happy halloween", "boo", "pumpkin",
-                       "knock knock", "anybody home", "anyone home"],
+                       "knock knock", "knock", "anybody home", "anyone home"],
         "knock": True,                # a knock on the door starts a visit too
         "knock_ratio": 8.0,           # how far above the room's noise a knock must jump (higher = less sensitive)
         "knocks": 2,                  # knocks within 1.5 s that count ("knock knock")
@@ -120,6 +120,15 @@ DEFAULTS = {
         "offset_deg": 0,              # ReSpeaker angle that points straight out from the pumpkin
         "flip": False,
         "match_deg": 25,              # how close a voice direction must be to a detected person
+    },
+    "idle": {
+        # A video shown while he waits for visitors (e.g. AtmosFX singing pumpkins); the live face takes over
+        # when a visit starts and the video comes back after it. Path relative to the pumpkin folder.
+        "video": "",
+        "sound": True,                # play its soundtrack through his speaker (needs ffmpeg; with the mic
+                                      # array's echo cancellation he still hears "trick or treat" over it)
+        "volume": 0.8,                # soundtrack loudness relative to his voice
+        "fade_s": 1.0,                # crossfade between the video and the face
     },
     "face": {
         "gaze_flip": False,

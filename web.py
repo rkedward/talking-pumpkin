@@ -45,7 +45,7 @@ class Hub:
         if event.get("t") == "log":
             with self.lock:
                 self.recent_logs = (self.recent_logs + [event])[-40:]
-        elif event.get("t") in ("calib", "window_calib", "show", "face_warp"):   # sticky: new pages get the latest alignment
+        elif event.get("t") in ("calib", "window_calib", "show", "face_warp", "idle"):   # sticky: new pages get the latest alignment
             with self.lock:
                 self.sticky[(event["t"], event.get("screen"))] = event
         with self.lock:
@@ -101,6 +101,8 @@ def serve(cfg, hub, app):
                 return self._frame()
             if self.path.startswith("/api/status"):
                 return self._json(200, app.status())
+            if self.path.startswith("/idle/video"):
+                return self._file(getattr(app, "idle_video_path", None))
             return super().do_GET()
 
         def do_POST(self):
@@ -145,6 +147,47 @@ def serve(cfg, hub, app):
                 pass
             finally:
                 hub.unsubscribe(q)
+
+        def _file(self, path):
+            """A big local file (the idle video) with Range support, so the browser can seek in it."""
+            import os as _os
+            if not path or not _os.path.isfile(path):
+                self.send_response(404)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            size = _os.path.getsize(path)
+            start, end = 0, size - 1
+            rng = self.headers.get("Range", "")
+            if rng.startswith("bytes="):
+                a, _, b = rng[6:].split(",")[0].partition("-")
+                if a:
+                    start = int(a)
+                    end = int(b) if b else end
+                elif b:
+                    start = max(0, size - int(b))
+                end = min(end, size - 1)
+                self.send_response(206)
+                self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+            else:
+                self.send_response(200)
+            ctype = self.extensions_map.get(_os.path.splitext(path)[1].lower(), "application/octet-stream")
+            self.send_header("Content-Type", ctype)
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Length", str(end - start + 1))
+            self.end_headers()
+            try:
+                with open(path, "rb") as f:
+                    f.seek(start)
+                    left = end - start + 1
+                    while left > 0:
+                        chunk = f.read(min(1 << 16, left))
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                        left -= len(chunk)
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
 
         def _frame(self):
             """One camera frame. The debug panel polls this; a long-lived MJPEG stream tends to stall in

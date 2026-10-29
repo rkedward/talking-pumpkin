@@ -331,6 +331,9 @@ def _clean_transcript(text):
         return ""   # three or more words straight out of the prompt: an echo, not a kid
     if text.lower() in _HALLUCINATIONS or re.fullmatch(r"[\W_]*", text):
         return ""
+    letters = re.findall(r"[^\W\d_]", text)
+    if any(not ("a" <= c.lower() <= "z") and c not in "éÉ" for c in letters):
+        return ""   # letters English doesn't use ("Za celý?"): noise misheard as another language
     return text
 
 

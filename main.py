@@ -6,6 +6,8 @@ Run:  python3 main.py      then open http://localhost:8000 (the Pi installer doe
 """
 
 import collections
+import contextlib
+import subprocess
 import json
 import math
 import queue
@@ -183,6 +185,7 @@ class Pumpkin:
         else:
             brain.configure(cfg["claude"])
         brain.set_look(self.sound)
+        self._idle_setup(cfg["idle"])
         threading.Thread(target=self._face_loop, daemon=True, name="face").start()
 
     # ---- helpers -------------------------------------------------------------------------------
@@ -420,6 +423,7 @@ class Pumpkin:
             self.force_greet = False
 
     def _visit(self, forced, trigger=None, said=None):
+        self.idle_show(False)   # the singing pumpkins make way for the live face
         v = self.cfg["visit"]
         self.abort_visit = False
         self.summons = 0
@@ -595,6 +599,7 @@ class Pumpkin:
         while True:
             self.awake = False
             self.set_state("idle")
+            self.idle_show(True)
             # After a visit, don't re-greet the same kids until they step away (or regreet_s passes,
             # for when the next group steps up as the last one leaves).
             left = False
@@ -615,6 +620,89 @@ class Pumpkin:
             self.set_state("cooldown")
             time.sleep(2.5)
 
+    # ---- idle video (e.g. AtmosFX singing pumpkins) ----------------------------------------------------
+    def _idle_setup(self, ic):
+        self.idle_video_path, self._idle_audio, self._idle_on, self._idle_thread = None, None, False, None
+        self._idle_hold = 0
+        if not ic["video"]:
+            return
+        path = config.resolve(ic["video"])
+        if not path.is_file():
+            self.log(f"idle video: {path} not found")
+            return
+        self.idle_video_path = str(path)
+        self._idle_cfg = ic
+        self.log(f"idle video: {path.name} (the live face takes over when a visit starts)")
+        if ic["sound"]:
+            threading.Thread(target=self._idle_load_audio, args=(path,), daemon=True, name="idle-audio").start()
+
+    def _idle_load_audio(self, path):
+        """The video's soundtrack, decoded once with ffmpeg (cached next to the video)."""
+        rate = self.speaker.rate_hint() if hasattr(self.speaker, "rate_hint") else 16000
+        cache = path.with_suffix(f".{rate}.s16")
+        try:
+            if not cache.exists() or cache.stat().st_mtime < path.stat().st_mtime:
+                subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(path), "-vn", "-ac", "1", "-ar", str(rate),
+                                "-f", "s16le", str(cache)], check=True, timeout=300)
+            audio = np.fromfile(cache, np.int16)
+            vol = float(self._idle_cfg["volume"])
+            if vol != 1.0:
+                audio = np.clip(audio.astype(np.float32) * vol, -32768, 32767).astype(np.int16)
+            self._idle_audio = (audio, rate)
+            self.log(f"idle video: soundtrack ready ({len(audio) / rate:.0f} s)")
+            if self._idle_on and not self._idle_thread:   # it was already showing silently: start the sound
+                self._idle_on = False
+                self.idle_show(True)
+        except Exception as exc:
+            self.log(f"idle video: no soundtrack ({type(exc).__name__}: {exc}); the video plays silently")
+
+    def idle_show(self, on):
+        """Show the idle video (with its soundtrack) or hand over to the live face."""
+        if not self.idle_video_path or on == self._idle_on:
+            return
+        self._idle_on = on
+        fade = float(self._idle_cfg["fade_s"])
+        if not on:
+            self.hub.publish({"t": "idle", "on": False, "fade": fade})
+            if self._idle_thread:
+                self._idle_thread.join(timeout=2)
+                self._idle_thread = None
+            return
+        if self._idle_audio is None:   # no sound (yet): the page loops the video by itself
+            self.hub.publish({"t": "idle", "on": True, "fade": fade, "start": None})
+            return
+        self._idle_thread = threading.Thread(target=self._idle_loop, daemon=True, name="idle-video")
+        self._idle_thread.start()
+
+    def _idle_loop(self):
+        audio, rate = self._idle_audio
+        fade = float(self._idle_cfg["fade_s"])
+        aec = self.speaker.aec
+        while self._idle_on:
+            # the page starts the (muted) video at the moment the soundtrack is heard
+            start = time.time() + self.speaker.lead_in + (self.speaker.latency or 0.15) + 0.05
+            self.hub.publish({"t": "idle", "on": True, "fade": fade, "start": start})
+            if aec:
+                self.mic.through_speech = True   # keep hearing "trick or treat" over the music
+            try:
+                self.speaker.play_clip(audio, rate, should_stop=lambda: not self._idle_on)
+            finally:
+                if aec:
+                    self.mic.through_speech = False
+
+    @contextlib.contextmanager
+    def idle_paused(self):
+        """For remote-control lines and the jump scare between visits: the face comes out for them."""
+        was = self._idle_on and not self.visit_active
+        if was:
+            self.idle_show(False)
+            time.sleep(float(self._idle_cfg["fade_s"]))
+        try:
+            yield
+        finally:
+            if was and not self.visit_active:
+                self.idle_show(True)
+
     def _run_sound(self):
         """Sound-triggered visits: wait for a "trick or treat" / hello, a knock, the doorbell or the remote."""
         v = self.cfg["visit"]
@@ -627,6 +715,7 @@ class Pumpkin:
         while True:
             self.awake = False
             self.set_state("idle")
+            self.idle_show(True)
             got = self.listener.wait_for_visitor(lambda: self.force_greet or not self.typed.empty(), is_wake,
                                                  stt=self.local_stt, knock=bool(v["knock"]),
                                                  knock_ratio=float(v["knock_ratio"]), knocks=int(v["knocks"]))
@@ -931,6 +1020,10 @@ class Pumpkin:
                 return {"error": f"mood must be one of {brain.MOODS}"}
 
             def speak():
+                with self.idle_paused():
+                    _speak()
+
+            def _speak():
                 before, was_awake = self.state, self.awake
                 self.awake = True          # eyes open and lit up, even between visits
                 if not was_awake:
@@ -990,8 +1083,12 @@ class Pumpkin:
     def jump_scare(self, delay=0.0, gotcha=True):
         """Remote control only (never the brain): the face goes dark, then a huge red monster face lunges out with a
         roar and a flash of the porch lights; then he giggles so little ones aren't left scared."""
+        time.sleep(delay)
+        with self.idle_paused():
+            self._jump_scare(gotcha)
+
+    def _jump_scare(self, gotcha):
         try:
-            time.sleep(delay)
             self.log("🎮 remote: jump scare", "info")
             was_awake, self.awake = self.awake, True
             self.reveal(True)

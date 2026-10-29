@@ -274,6 +274,20 @@ It talks over stdio and opens nothing new to the network. The puppet commands on
 `/api/set_mood`, `/api/play_song`, `/api/recent`) only answer the Pi itself, or a request carrying the
 `X-Pumpkin-Key` header that matches `PUMPKIN_KEY` in `.env`. Don't expose the web port to the internet.
 
+### Add-on: Singing pumpkins while he waits (idle video)
+
+Show a video, such as AtmosFX's singing pumpkins, while nobody is visiting. When a visit starts it fades into the
+live face, and it comes back after the goodbye. Copy the video to the Pi (e.g. `static/atmos/`) and set:
+
+```toml
+[idle]
+video = "static/atmos/your-video.mp4"
+# sound = true                 # soundtrack through his speaker; the mic array cancels it so he still hears "trick or treat"
+# volume = 0.8
+```
+
+The soundtrack is decoded once with ffmpeg. The picture plays muted in the face page, lined up with the sound.
+
 ### Add-on: Fog and lights
 
 A puff of fog and a flash of lights when kids arrive. Use a plug-in power relay for lights (no mains
