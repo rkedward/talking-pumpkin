@@ -1,6 +1,7 @@
 """Speech in (mic + voice activity detection + local Whisper) and speech out (Piper neural TTS, OpenAI,
 ElevenLabs or espeak) with mouth movement driven by the actual loudness of the audio being played."""
 
+import collections
 import io
 import json
 import queue
@@ -98,6 +99,31 @@ class Microphone:
     def flush(self):
         while not self.frames.empty():
             self.frames.get_nowait()
+
+
+_VAD = None
+
+
+def speech_ms(audio, rate=16000):
+    """How much of this sound is a human voice, in ms, by Silero VAD (it comes with faster-whisper): typing,
+    clicks, bumps and clatter score 0. None if the detector isn't available."""
+    global _VAD
+    if _VAD is None:
+        try:
+            from faster_whisper.vad import VadOptions, get_speech_timestamps
+            _VAD = (get_speech_timestamps, VadOptions(threshold=0.5, min_speech_duration_ms=200))
+        except Exception:
+            _VAD = False
+    if not _VAD:
+        return None
+    if rate != 16000:
+        n = int(len(audio) * 16000 / rate)
+        audio = np.interp(np.linspace(0, len(audio), n, endpoint=False), np.arange(len(audio)), audio)
+    try:
+        spans = _VAD[0](np.asarray(audio, np.float32), _VAD[1])
+    except Exception:
+        return None
+    return sum(sp["end"] - sp["start"] for sp in spans) / 16
 
 
 def _thump(frame, rate=16000):
@@ -212,6 +238,7 @@ class Listener:
         pre_roll, voiced, chunks, silent, speech = [], [], [], 0, False
         burst, hits, clock = 0, [], 0.0   # knock: how long the current loud burst is; times of short bursts
         prev, refs, loudest, report, peak = self.noise, [], 0.0, 10.0, 0.0
+        recent = collections.deque(maxlen=330)   # ~10 s of frame levels: the room's floor is a low percentile
         while not should_stop():
             if not self.mic.ok or stt is None:
                 time.sleep(0.1)
@@ -223,6 +250,9 @@ class Listener:
             rms = float(np.sqrt(np.mean(frame.astype(np.float32) ** 2)))
             clock += frame_s               # audio time (frames can arrive in bursts)
             now = clock
+            recent.append(rms)
+            if len(recent) >= 30 and len(recent) % 15 == 0:
+                self.noise = max(30.0, float(np.percentile(recent, 20)))
             echo = 0.0
             if music():
                 refs = (refs + [self.mic.heard_level])[-12:]   # what the speaker played in the last ~0.35 s
@@ -264,8 +294,6 @@ class Listener:
             if not speech:
                 pre_roll = (pre_roll + [frame])[-10:]
                 voiced = voiced + [frame] if loud else []
-                if not loud and not refs:   # room noise is measured between songs, not from the music's echo
-                    self.noise = 0.95 * self.noise + 0.05 * rms
                 if len(voiced) >= 5 and (voice is None or voice()):   # knocks, clatter and typing aren't words
                     speech, silent, chunks = True, 0, list(pre_roll)
             else:
@@ -277,6 +305,12 @@ class Listener:
                 if silent * frame_s >= float(self.cfg["silence_end_s"]):
                     audio = np.concatenate(chunks).astype(np.float32) / 32768.0
                     speech, pre_roll, voiced = False, [], []
+                    voice_ms = speech_ms(audio, self.mic.rate)
+                    if voice_ms is not None and voice_ms < 250:   # typing, clicks, bumps: not a person talking
+                        if self.log:
+                            self.log(f"(not speech: {voice_ms:.0f} ms of voice in {len(audio) / self.mic.rate:.1f} s of sound)",
+                                     "info")
+                        continue
                     try:
                         text = stt.transcribe(audio, self.mic.rate)
                     except Exception:
@@ -333,6 +367,10 @@ class Listener:
                 too_long = len(chunks) * frame_s > float(self.cfg["max_utterance_s"])
                 if silent * frame_s >= float(self.cfg["silence_end_s"]) or too_long:
                     audio = np.concatenate(chunks).astype(np.float32) / 32768.0
+                    voice_ms = speech_ms(audio, self.mic.rate)
+                    if voice_ms is not None and voice_ms < 200:   # a click or bump, not someone talking
+                        speech, pre_roll, voiced = False, [], []
+                        continue
                     stt_from = time.time()
                     pause = self.on_busy if getattr(self.stt, "local", True) else None
                     if pause:
