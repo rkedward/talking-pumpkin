@@ -6,3 +6,4 @@ models/*
 !models/efficientdet_lite0.tflite
 sounds/songs/
 sounds/laughs/*.wav
+static/echotest.wav

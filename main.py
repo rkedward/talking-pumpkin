@@ -13,6 +13,9 @@ import socket
 import sys
 import threading
 import time
+import wave
+
+import numpy as np
 
 import brain
 import tunes
@@ -443,8 +446,105 @@ class Pumpkin:
             self.mood("neutral")
             self.awake = was_awake
 
+    ECHO_TEST_TEXT = ("Testing, testing. This is the pumpkin checking whether the mic array can hear me. "
+                      "If echo cancellation works, my own voice should almost vanish from the microphone. "
+                      "One, two, three, four, five. Happy Halloween!")
+
+    def echo_test(self):
+        """Debug-panel button: play speech through the speaker while recording the mic array, and report how
+        much of the pumpkin's own voice gets through (echo cancellation) and whether barge-in would have
+        interrupted him. The recording is saved as static/echotest.wav (one channel per mic channel)."""
+        if self.awake or self.speaking or not self.mic.ok:
+            self.log("echo test: " + ("no microphone" if not self.mic.ok else "busy, try again after the visit"))
+            return
+        fs = 0.03
+        rate = self.mic.rate
+        self.log(f"🔊 echo test: speaker {'is' if self.speaker.aec else 'is NOT'} the mic array "
+                 f"({'echo cancellation can work' if self.speaker.aec else 'no echo cancellation possible'}); "
+                 "stay quiet for a moment...")
+        self.mic.recording, levels = [], []
+        stop = threading.Event()
+
+        def track():    # what the speaker is playing, sampled alongside the mic
+            while not stop.is_set():
+                levels.append((time.time(), self.mic.heard_level))
+                time.sleep(fs / 2)
+
+        threading.Thread(target=track, daemon=True).start()
+        started = time.time()
+        time.sleep(1.5)                                    # room noise
+        quiet_n = sum(len(b) for b in self.mic.recording)
+        barged_at = None
+        if self.barge_in:
+            self.listener.start_watch()
+        self.speaking = True
+        play_from = time.time()
+        try:
+            self.speaker.speak(self.ECHO_TEST_TEXT, on_level=self._set_mouth)
+        finally:
+            self.speaking = False
+            self.mouth = 0.0
+        if self.barge_in:
+            if self.listener.interrupted.is_set():
+                barged_at = "yes"
+            self.listener.stop_watch()
+            self.listener.reset()
+        time.sleep(1.0)
+        stop.set()
+        audio = np.concatenate(self.mic.recording) if self.mic.recording else np.zeros((0, 1), np.int16)
+        self.mic.recording = None
+
+        # Per 30 ms frame: mic loudness on each channel, and whether the speaker was playing then.
+        block = int(rate * fs)
+        n = len(audio) // block
+        frames = audio[:n * block].reshape(n, block, -1).astype(np.float32)
+        rms = np.sqrt(np.mean(frames ** 2, axis=1))                  # (frames, channels)
+        t = started + np.arange(n) * fs
+        lt = np.array([x[0] for x in levels]) if levels else np.zeros(1)
+        lv = np.array([x[1] for x in levels]) if levels else np.zeros(1)
+        playing = np.interp(t, lt, lv) > 200
+        quiet = np.arange(n) < quiet_n // block
+        db = lambda a, b: 20 * np.log10(max(a, 1.0) / max(b, 1.0))
+        lines = []
+        for ch in range(rms.shape[1]):
+            noise = float(np.median(rms[quiet, ch])) if quiet.any() else 1.0
+            echo = float(np.median(rms[playing, ch])) if playing.any() else 0.0
+            loud = float(np.percentile(rms[playing, ch], 90)) if playing.any() else 0.0
+            label = {0: "conference", 1: "speech recognition"}.get(ch, "") if rms.shape[1] <= 2 else ""
+            mark = " (used)" if ch == self.mic.channel else ""
+            lines.append(f"ch{ch} {label}{mark}: room {noise:.0f}, while talking {echo:.0f} "
+                         f"(peaks {loud:.0f}) = {db(echo, noise):+.0f} dB over the room")
+        ch = self.mic.channel
+        noise = float(np.median(rms[quiet, ch])) if quiet.any() else 1.0
+        per_s = []                                                    # does it improve as the AEC settles?
+        first = int((play_from - started) / fs)
+        for i in range(first, n, int(1 / fs)):
+            sel = playing[i:i + int(1 / fs)]
+            if sel.sum() > 5:
+                per_s.append(f"{db(float(np.median(rms[i:i + int(1 / fs), ch][sel])), noise):+.0f}")
+        for line in lines:
+            self.log("🔊 " + line)
+        if per_s:
+            self.log("🔊 each second while talking, dB over the room: " + " ".join(per_s))
+        over = db(float(np.median(rms[playing, ch])) if playing.any() else 0.0, noise)
+        verdict = ("echo is well cancelled" if over < 6 else "echo is partly cancelled" if over < 15
+                   else "echo is NOT being cancelled")
+        if self.barge_in:
+            verdict += "; barge-in " + ("WOULD have interrupted itself" if barged_at else "stayed quiet (good)")
+        self.log(f"🔊 echo test: {verdict}. Recording: /echotest.wav")
+        try:
+            with wave.open(str(config.ROOT / "static" / "echotest.wav"), "wb") as w:
+                w.setnchannels(audio.shape[1] if audio.ndim > 1 else 1)
+                w.setsampwidth(2)
+                w.setframerate(rate)
+                w.writeframes(audio.astype(np.int16).tobytes())
+        except Exception as exc:
+            self.log(f"echo test: couldn't save the recording ({exc})")
+
     def command(self, name, data):
-        if name == "faces":
+        if name == "echo_test":
+            threading.Thread(target=self.echo_test, daemon=True, name="echo-test").start()
+        elif name == "faces":
             threading.Thread(target=self.face_demo, daemon=True).start()
         elif name == "greet":
             self.force_greet = True

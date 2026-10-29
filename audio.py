@@ -50,6 +50,7 @@ class Microphone:
         self.user_muted = False
         self.through_speech = False   # true while barge-in listens during speech: speaking doesn't mute
         self.heard_level = 0.0        # loudness of the pumpkin's voice coming out of the speaker right now
+        self.recording = None         # a list while the echo test records
         self.name = ""
         self.ok = False
         if not sd:
@@ -77,6 +78,8 @@ class Microphone:
             log(f"mic: could not open ({exc}); type questions in the debug panel")
 
     def _callback(self, indata, frames, t, status):
+        if self.recording is not None:          # echo test: every channel, never muted
+            self.recording.append(indata.copy())
         if self.user_muted or time.time() < self.muted_until:
             return
         try:
