@@ -36,7 +36,8 @@ function idleVideo(ev) {
     return;
   }
   idleOn = true;
-  if (!idleEl.src) idleEl.src = "idle/video";
+  const src = `idle/video?clip=${ev.clip ?? 0}`;
+  if (idleEl.getAttribute("src") !== src) { idleEl.setAttribute("src", src); idleEl.load(); }
   const start = () => {
     if (ev.start) {            // the brain plays the soundtrack: line the picture up with it
       idleEl.loop = false;

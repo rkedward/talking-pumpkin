@@ -123,7 +123,8 @@ DEFAULTS = {
     },
     "idle": {
         # A video shown while he waits for visitors (e.g. AtmosFX singing pumpkins); the live face takes over
-        # when a visit starts and the video comes back after it. Path relative to the pumpkin folder.
+        # when a visit starts and the video comes back after it. Path relative to the pumpkin folder, or a list
+        # of paths to play in turn.
         "video": "",
         "sound": True,                # play its soundtrack through his speaker (needs ffmpeg; with the mic
                                       # array's echo cancellation he still hears "trick or treat" over it)

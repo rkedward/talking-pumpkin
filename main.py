@@ -624,77 +624,98 @@ class Pumpkin:
 
     # ---- idle video (e.g. AtmosFX singing pumpkins) ----------------------------------------------------
     def _idle_setup(self, ic):
-        self.idle_video_path, self._idle_audio, self._idle_on, self._idle_thread = None, None, False, None
-        self._idle_playing = False   # its soundtrack is coming out of the speaker right now
-        self._lyrics = []            # [(start s, words)] of the soundtrack (transcribed once), so the song can't wake him
-        self._idle_started = 0.0     # when the current loop of the soundtrack started sounding
-        if not ic["video"]:
-            return
-        path = config.resolve(ic["video"])
-        if not path.is_file():
-            self.log(f"idle video: {path} not found")
-            return
-        self.idle_video_path = str(path)
+        """[idle] video: one file, or a list of them to play in turn."""
+        self._idle_clips = []        # [{"path", "audio": (samples, rate) | None, "lyrics": [(start s, words)]}]
+        self._idle_on, self._idle_thread = False, None
+        self._idle_playing = False   # a soundtrack is coming out of the speaker right now
+        self._idle_clip = None       # the clip playing now
+        self._idle_started = 0.0     # when the current clip's soundtrack started sounding
         self._idle_cfg = ic
-        self.log(f"idle video: {path.name} (the live face takes over when a visit starts)")
+        videos = ic["video"] if isinstance(ic["video"], list) else [ic["video"]] if ic["video"] else []
+        for v in videos:
+            path = config.resolve(v)
+            if path.is_file():
+                self._idle_clips.append({"path": path, "audio": None, "lyrics": []})
+            else:
+                self.log(f"idle video: {path} not found")
+        if not self._idle_clips:
+            return
+        self.log("idle video: " + ", then ".join(c["path"].name for c in self._idle_clips)
+                 + " (the live face takes over when a visit starts)")
         if ic["sound"]:
-            threading.Thread(target=self._idle_load_audio, args=(path,), daemon=True, name="idle-audio").start()
+            threading.Thread(target=self._idle_load_audio, daemon=True, name="idle-audio").start()
 
-    def _idle_load_audio(self, path):
-        """The video's soundtrack, decoded once with ffmpeg (cached next to the video)."""
-        rate = self.speaker.rate_hint() if hasattr(self.speaker, "rate_hint") else 16000
-        cache = path.with_suffix(f".{rate}.s16")
+    def idle_video_file(self, i):
+        """For the web server: the file of clip i."""
         try:
-            if not cache.exists() or cache.stat().st_mtime < path.stat().st_mtime:
-                subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(path), "-vn", "-ac", "1", "-ar", str(rate),
-                                "-f", "s16le", str(cache)], check=True, timeout=300)
-            audio = np.fromfile(cache, np.int16)
-            vol = float(self._idle_cfg["volume"])
-            if vol != 1.0:
-                audio = np.clip(audio.astype(np.float32) * vol, -32768, 32767).astype(np.int16)
-            self._idle_audio = (audio, rate)
-            self.log(f"idle video: soundtrack ready ({len(audio) / rate:.0f} s)")
-            if self._idle_on and not self._idle_thread:   # it was already showing silently: start the sound
-                self._idle_on = False
-                self.idle_show(True)
-            self._idle_lyrics(path, audio, rate)          # (slow the first time; the music doesn't wait for it)
-        except Exception as exc:
-            self.log(f"idle video: no soundtrack ({type(exc).__name__}: {exc}); the video plays silently")
+            return str(self._idle_clips[int(i)]["path"])
+        except (ValueError, IndexError, TypeError):
+            return None
+
+    @property
+    def idle_video_path(self):
+        return self.idle_video_file(0)
+
+    def _idle_load_audio(self):
+        """Each clip's soundtrack, decoded once with ffmpeg (cached next to the video), then its words."""
+        rate = 16000
+        for clip in self._idle_clips:
+            path = clip["path"]
+            cache = path.with_suffix(f".{rate}.s16")
+            try:
+                if not cache.exists() or cache.stat().st_mtime < path.stat().st_mtime:
+                    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(path), "-vn", "-ac", "1", "-ar", str(rate),
+                                    "-f", "s16le", str(cache)], check=True, timeout=300)
+                audio = np.fromfile(cache, np.int16)
+                vol = float(self._idle_cfg["volume"])
+                if vol != 1.0:
+                    audio = np.clip(audio.astype(np.float32) * vol, -32768, 32767).astype(np.int16)
+                clip["audio"] = (audio, rate)
+                self.log(f"idle video: {path.name} soundtrack ready ({len(audio) / rate:.0f} s)")
+            except Exception as exc:
+                self.log(f"idle video: no soundtrack for {path.name} ({type(exc).__name__}: {exc})")
+        if self._idle_on and not self._idle_thread:   # it was already showing silently: start the sound
+            self._idle_on = False
+            self.idle_show(True)
+        for clip in self._idle_clips:                 # (slow the first time; the music doesn't wait for it)
+            if clip["audio"]:
+                self._idle_lyrics(clip)
 
     LYRIC_CHUNK_S = 10
 
-    def _idle_lyrics(self, path, audio, rate):
+    def _idle_lyrics(self, clip):
         """Write down the song's words once with the Pi's whisper, 10 s at a time: whatever the song is singing
         right now, leaking through the echo cancelling, mustn't count as a visitor saying hello."""
+        path, (audio, rate) = clip["path"], clip["audio"]
         cache = path.with_suffix(".lyrics.json")
         try:
             if cache.exists() and cache.stat().st_mtime >= path.stat().st_mtime:
-                self._lyrics = [tuple(x) for x in json.loads(cache.read_text())]
+                clip["lyrics"] = [tuple(x) for x in json.loads(cache.read_text())]
             elif self.local_stt is not None and getattr(self.local_stt, "local", False):
                 step, out = rate * self.LYRIC_CHUNK_S, []
                 for i in range(0, len(audio), step):
                     text = self.local_stt.transcribe(audio[i:i + step].astype(np.float32) / 32768.0, rate)
                     out.append((i / rate, text.lower()))
-                self._lyrics = out
+                clip["lyrics"] = out
                 cache.write_text(json.dumps(out))
-            if self._lyrics:
-                self.log(f"idle video: the song's words won't wake him while it sings them "
-                         f"({sum(len(t.split()) for _, t in self._lyrics)} words)")
+            if clip["lyrics"]:
+                self.log(f"idle video: {path.name}: its words won't wake him while it sings them "
+                         f"({sum(len(t.split()) for _, t in clip['lyrics'])} words)")
         except Exception as exc:
-            self.log(f"idle video: couldn't write down the song's words ({exc})")
+            self.log(f"idle video: couldn't write down the words of {path.name} ({exc})")
 
     def _lyrics_near(self, before=8.0, after=3.0):
-        """The song's words around where it is now (what someone just 'said' may be the song)."""
-        if not self._lyrics or not self._idle_audio:
+        """The playing song's words around where it is now (what someone just 'said' may be the song)."""
+        clip = self._idle_clip
+        if not clip or not clip["lyrics"] or not clip["audio"]:
             return ""
-        audio, rate = self._idle_audio
-        pos = (time.time() - self._idle_started) % (len(audio) / rate)
-        return " ".join(t for st, t in self._lyrics
-                        if st < pos + after and st + self.LYRIC_CHUNK_S > pos - before)
+        audio, rate = clip["audio"]
+        pos = time.time() - self._idle_started
+        return " ".join(t for st, t in clip["lyrics"] if st < pos + after and st + self.LYRIC_CHUNK_S > pos - before)
 
     def idle_show(self, on):
         """Show the idle video (with its soundtrack) or hand over to the live face."""
-        if not self.idle_video_path or on == self._idle_on:
+        if not self._idle_clips or on == self._idle_on:
             return
         self._idle_on = on
         fade = float(self._idle_cfg["fade_s"])
@@ -704,21 +725,25 @@ class Pumpkin:
                 self._idle_thread.join(timeout=2)
                 self._idle_thread = None
             return
-        if self._idle_audio is None:   # no sound (yet): the page loops the video by itself
-            self.hub.publish({"t": "idle", "on": True, "fade": fade, "start": None})
+        if not any(c["audio"] for c in self._idle_clips):   # no sound (yet): the page loops the first clip
+            self.hub.publish({"t": "idle", "on": True, "fade": fade, "start": None, "clip": 0})
             return
         self._idle_thread = threading.Thread(target=self._idle_loop, daemon=True, name="idle-video")
         self._idle_thread.start()
 
     def _idle_loop(self):
-        audio, rate = self._idle_audio
         fade = float(self._idle_cfg["fade_s"])
         aec = self.speaker.aec
+        clips = [i for i, c in enumerate(self._idle_clips) if c["audio"]]
+        n = getattr(self, "_idle_next", 0)
         while self._idle_on:
+            i = clips[n % len(clips)]
+            clip = self._idle_clips[i]
+            audio, rate = clip["audio"]
             # the page starts the (muted) video at the moment the soundtrack is heard
             start = time.time() + self.speaker.lead_in + (self.speaker.latency or 0.15) + 0.05
-            self._idle_started = start
-            self.hub.publish({"t": "idle", "on": True, "fade": fade, "start": start})
+            self._idle_clip, self._idle_started = clip, start
+            self.hub.publish({"t": "idle", "on": True, "fade": fade, "start": start, "clip": i})
             if aec:
                 self.mic.through_speech = True   # keep hearing "trick or treat" over the music
             self._idle_playing = True
@@ -728,6 +753,9 @@ class Pumpkin:
                 self._idle_playing = False
                 if aec:
                     self.mic.through_speech = False
+            if self._idle_on:          # finished: the next song (after a visit, the next one too)
+                n += 1
+        self._idle_next = n + 1
 
     @contextlib.contextmanager
     def idle_paused(self):

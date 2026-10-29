@@ -102,7 +102,8 @@ def serve(cfg, hub, app):
             if self.path.startswith("/api/status"):
                 return self._json(200, app.status())
             if self.path.startswith("/idle/video"):
-                return self._file(getattr(app, "idle_video_path", None))
+                clip = (parse_qs(urlparse(self.path).query).get("clip") or ["0"])[0]
+                return self._file(app.idle_video_file(clip) if hasattr(app, "idle_video_file") else None)
             return super().do_GET()
 
         def do_POST(self):
