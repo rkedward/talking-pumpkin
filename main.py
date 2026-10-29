@@ -115,6 +115,8 @@ class Pumpkin:
             except Exception as exc:
                 self.log(f"speech recognition off ({type(exc).__name__}: {exc}); type questions in the debug panel")
         self.listener = Listener(self.mic, cfg["mic"], stt)
+        if cfg["stt"].get("pause_camera", True):   # give speech recognition the whole CPU
+            self.listener.on_busy = self.vision.pause
         self.speaker = Speaker(make_tts(cfg["tts"], self.log), cfg["tts"], self.mic, self.log)
         self.barge_in = self._barge_in_setup(cfg["mic"])
         self._echo_lock = threading.Lock()
@@ -583,7 +585,7 @@ class Pumpkin:
         if lag is not None:
             self.log(f"🔊 lip sync: the sound reaches the mic {lag * 1000:+.0f} ms after the mouth moves "
                      f"(mouth_delay is {self.speaker.mouth_delay:.2f}; try [tts] mouth_delay = "
-                     f"{max(0.0, self.speaker.mouth_delay + lag):.2f})")
+                     f"{self.speaker.mouth_delay + lag:.2f}; negative = mouth earlier)")
         self.log(f"🔊 echo test: {verdict}. Recording: /echotest.wav")
         try:
             with wave.open(str(config.ROOT / "static" / "echotest.wav"), "wb") as w:

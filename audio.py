@@ -112,6 +112,7 @@ class Listener:
         self._watcher = None
         self.echo_gain, self._echo_frames = 0.0, 0
         self.timing = {}
+        self.on_busy = None            # called with True/False around speech recognition (pauses the camera)
 
     # ---- barge-in: someone talks over the pumpkin -------------------------------------------------
     def start_watch(self):
@@ -232,7 +233,13 @@ class Listener:
                 if silent * frame_s >= float(self.cfg["silence_end_s"]) or too_long:
                     audio = np.concatenate(chunks).astype(np.float32) / 32768.0
                     stt_from = time.time()
-                    text = self.stt.transcribe(audio, self.mic.rate)
+                    if self.on_busy:
+                        self.on_busy(True)
+                    try:
+                        text = self.stt.transcribe(audio, self.mic.rate)
+                    finally:
+                        if self.on_busy:
+                            self.on_busy(False)
                     # for the response-time log: when they stopped talking, and how long recognition took
                     self.timing = {"stopped": stt_from - silent * frame_s, "wait": silent * frame_s,
                                    "stt": time.time() - stt_from}
@@ -847,7 +854,7 @@ class Speaker:
         """Write (block, mouth level, loudness) items. Each block's level goes on a timeline at the moment the
         block will actually be heard; a separate clock (_mouth_loop) moves the mouth from that timeline. Timing
         the mouth on when writes return made it jerky: the driver releases writes in bursts."""
-        latency = (stream.latency or 0) + self.mouth_delay
+        latency = max(0.0, (stream.latency or 0) + self.mouth_delay)
         for out, level, rms in items:
             if should_stop():
                 break

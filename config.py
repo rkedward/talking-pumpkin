@@ -34,6 +34,7 @@ DEFAULTS = {
         "min_score": 0.45,
         "min_height": 0.25,           # ignore people smaller than this fraction of the frame (far away)
         "threads": 4,
+        "pause_camera": True,         # stop person detection while it transcribes (the camera competes for the CPU)
         "fps": 12,
     },
     "visit": {
@@ -71,6 +72,7 @@ DEFAULTS = {
         "model": "base.en",           # tiny.en is faster, small.en more accurate
         "compute_type": "int8",
         "threads": 4,
+        "pause_camera": True,         # stop person detection while it transcribes (the camera competes for the CPU)
     },
     "tts": {
         "engine": "piper",            # piper | openai | elevenlabs | espeak | none

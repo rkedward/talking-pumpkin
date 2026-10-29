@@ -204,7 +204,16 @@ class Vision:
         self.last_frame = None
         self.detect_ms = 0.0
         self._lock = threading.Lock()
+        self.paused = False
         threading.Thread(target=self._loop, daemon=True, name="vision").start()
+
+    def pause(self, on):
+        """Stop detecting for a moment (speech recognition wants every CPU core). Whoever was there counts
+        as still there meanwhile."""
+        with self._lock:
+            if not on and self.paused and self.people:
+                self.last_seen = time.time()
+            self.paused = bool(on)
 
     def bearing(self, person):
         """Horizontal angle of a person from the camera axis, degrees; positive = right side of the image."""
@@ -213,6 +222,12 @@ class Vision:
     def _loop(self):
         last_id = -1
         while True:
+            if self.paused:
+                with self._lock:
+                    if self.people:
+                        self.last_seen = time.time()
+                time.sleep(0.02)
+                continue
             started = time.time()
             frame, fid = self.camera.read()
             if frame is None or fid == last_id:
