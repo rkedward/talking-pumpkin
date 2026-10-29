@@ -652,10 +652,10 @@ class Pumpkin:
                 audio = np.clip(audio.astype(np.float32) * vol, -32768, 32767).astype(np.int16)
             self._idle_audio = (audio, rate)
             self.log(f"idle video: soundtrack ready ({len(audio) / rate:.0f} s)")
-            self._idle_lyrics(path, audio, rate)
             if self._idle_on and not self._idle_thread:   # it was already showing silently: start the sound
                 self._idle_on = False
                 self.idle_show(True)
+            self._idle_lyrics(path, audio, rate)          # (slow the first time; the music doesn't wait for it)
         except Exception as exc:
             self.log(f"idle video: no soundtrack ({type(exc).__name__}: {exc}); the video plays silently")
 
