@@ -7,6 +7,7 @@ masked and fully costumed kids are found even when their faces are hidden.
 
 import base64
 import sys
+import os
 import threading
 import time
 
@@ -192,9 +193,12 @@ class Vision:
     def __init__(self, cam_cfg, det_cfg, log):
         self.log = log
         self.hfov = float(cam_cfg["hfov_deg"])
-        self.fps = float(det_cfg["fps"])
+        self.fps = self.idle_fps = float(det_cfg["fps"])
+        self.visit_fps = float(det_cfg.get("visit_fps", self.fps))
+        self.nice = int(det_cfg.get("nice", 10))
         self.camera = Camera(cam_cfg, log)
-        self.detector = PersonDetector(det_cfg)
+        self._det_cfg = det_cfg
+        self.detector = None
         self.people = []
         self.target = None
         self.first_seen = 0.0
@@ -205,7 +209,13 @@ class Vision:
         self.detect_ms = 0.0
         self._lock = threading.Lock()
         self.paused = False
+        # The detector is made on its own thread, so its worker threads get that thread's lower priority.
+        self._ready = threading.Event()
+        self._init_error = None
         threading.Thread(target=self._loop, daemon=True, name="vision").start()
+        self._ready.wait()
+        if self._init_error:
+            raise self._init_error
 
     def pause(self, on):
         """Stop detecting for a moment (speech recognition wants every CPU core). Whoever was there counts
@@ -219,8 +229,23 @@ class Vision:
         """Horizontal angle of a person from the camera axis, degrees; positive = right side of the image."""
         return (person["x"] + person["w"] / 2 - 0.5) * self.hfov
 
+    def conversation(self, on):
+        """During a conversation the voice comes first: detect less often (the eyes still follow)."""
+        self.fps = self.visit_fps if on else self.idle_fps
+
     def _loop(self):
         last_id = -1
+        try:   # Linux: per-thread priority; the detector's worker threads started from here inherit it
+            os.setpriority(os.PRIO_PROCESS, threading.get_native_id(), self.nice)
+        except Exception:
+            pass
+        try:
+            self.detector = PersonDetector(self._det_cfg)
+        except Exception as exc:
+            self._init_error = exc
+            return
+        finally:
+            self._ready.set()
         while True:
             if self.paused:
                 with self._lock:

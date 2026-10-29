@@ -34,8 +34,9 @@ DEFAULTS = {
         "min_score": 0.45,
         "min_height": 0.25,           # ignore people smaller than this fraction of the frame (far away)
         "threads": 4,
-        "pause_camera": True,         # stop person detection while it transcribes (the camera competes for the CPU)
         "fps": 12,
+        "visit_fps": 4,               # during a conversation: fewer detections, more CPU for speech (eyes still follow)
+        "nice": 10,                   # lower CPU priority for detection than for speech (0 = same, 19 = lowest)
     },
     "visit": {
         "arrive_s": 0.9,              # person must be in view this long before the greeting
@@ -71,6 +72,7 @@ DEFAULTS = {
         "engine": "whisper",          # whisper | none (type questions in the debug panel)
         "model": "base.en",           # tiny.en is faster, small.en more accurate
         "compute_type": "int8",
+        "pause_camera": True,         # stop person detection while it transcribes (the camera competes for the CPU)
         "threads": 4,
         "pause_camera": True,         # stop person detection while it transcribes (the camera competes for the CPU)
     },

@@ -340,6 +340,7 @@ class Pumpkin:
         self.abort_visit = False
         self.summons = 0
         self.listener.reset()
+        self.vision.conversation(True)
         doorbell, self.doorbell_pending = self.doorbell_pending, False
         if doorbell:
             self.set_state("doorbell")
@@ -423,6 +424,7 @@ class Pumpkin:
             self.show.dismiss()
         self.home.send("visit_end")
         self.reveal(False)
+        self.vision.conversation(False)
         self.awake = False
         self.mood("neutral")
         self.props.expression("neutral")
