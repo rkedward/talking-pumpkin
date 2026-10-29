@@ -5,6 +5,7 @@ moves the eyes, mouth and props. The face itself is drawn by static/index.html i
 Run:  python3 main.py      then open http://localhost:8000 (the Pi installer does both at boot)
 """
 
+import collections
 import json
 import math
 import queue
@@ -68,6 +69,8 @@ class Pumpkin:
         self.abort_visit = False
         self.force_greet = False
         self.typed = queue.Queue()
+        self.history = collections.deque(maxlen=400)   # recent log lines, for the remote control (mcp_server.py)
+        self.visit_session = ""
         saved = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
         self.gaze_flip = saved.get("gaze_flip", cfg["face"]["gaze_flip"])
         self.calib = saved.get("calib")
@@ -140,6 +143,7 @@ class Pumpkin:
     # ---- helpers -------------------------------------------------------------------------------
     def log(self, text, cls="info"):
         print(f"[{cls}] {text}", flush=True)
+        self.history.append({"time": time.strftime("%H:%M:%S"), "kind": cls, "text": text})
         self.hub.publish({"t": "log", "cls": cls, "text": text})
 
     def set_state(self, s):
@@ -385,7 +389,7 @@ class Pumpkin:
         worker.join()
         if result.get("costumes"):
             self.log(f"costumes: {'; '.join(result['costumes'])}")
-        session = result.get("session", "")
+        session = self.visit_session = result.get("session", "")
         self.mood(result.get("mood"))
         cut_off = self.say(result.get("say"), interruptible=True)
         if cut_off is None:
@@ -456,6 +460,7 @@ class Pumpkin:
                     max_s += float(v["game_extra_s"])
                 self.play_song(reply["play_song"])
             turns += 1
+        self.visit_session = ""
         self.props.visit_over()
         if self.show:
             self.show.dismiss()
@@ -742,6 +747,8 @@ class Pumpkin:
         elif name == "mute":
             self.mic.user_muted = not self.mic.user_muted
             self.log(f"mic {'muted' if self.mic.user_muted else 'on'}")
+        elif name in ("say", "set_mood", "play_song", "songs", "recent"):
+            return self.remote_command(name, data)
         elif name == "ask":
             text = str(data.get("text", ""))[:300].strip()
             if text:
@@ -749,6 +756,61 @@ class Pumpkin:
         else:
             return {"error": "unknown command"}
         return {"ok": True}
+
+    def remote_command(self, name, data):
+        """Puppet controls for the remote control (mcp_server.py). web.py only lets these through from the
+        Pi itself or with the PUMPKIN_KEY."""
+        if name == "say":
+            text = str(data.get("text", ""))[:600].strip()
+            if not text:
+                return {"error": "nothing to say"}
+            mood = data.get("mood")
+            if mood and mood not in brain.MOODS:
+                return {"error": f"mood must be one of {brain.MOODS}"}
+
+            def speak():
+                before, was_awake = self.state, self.awake
+                self.awake = True          # eyes open and lit up, even between visits
+                if not was_awake:
+                    self.reveal(True)
+                if mood:
+                    self.mood(mood)
+                self.log("🎮 remote: say", "info")
+                try:
+                    self.say(text)
+                finally:
+                    if self.visit_session:   # so his next reply knows he said it
+                        brain.note_said(self.visit_session, text)
+                    if self.state == "speaking":
+                        self.set_state(before)
+                    if not was_awake and not self.visit_session:
+                        self.awake = False
+                        self.reveal(False)
+            threading.Thread(target=speak, daemon=True, name="remote-say").start()
+            return {"ok": True, "in_visit": bool(self.visit_session)}
+        if name == "set_mood":
+            mood = str(data.get("mood", ""))
+            if mood not in brain.MOODS:
+                return {"error": f"mood must be one of {brain.MOODS}"}
+            self.mood(mood)
+            return {"ok": True}
+        if name == "songs":
+            return {"songs": {sid: {"title": i["title"], "kind": i["kind"]} for sid, i in tunes.catalog().items()}}
+        if name == "play_song":
+            song = str(data.get("song_id", ""))
+            if song not in tunes.catalog():
+                return {"error": "unknown song; list them with songs"}
+            threading.Thread(target=self.play_song, args=(song,), daemon=True, name="remote-song").start()
+            return {"ok": True, "title": tunes.catalog()[song]["title"]}
+        if name == "recent":
+            try:
+                n = max(1, min(400, int(data.get("lines", 60))))
+            except (TypeError, ValueError):
+                n = 60
+            kinds = data.get("kinds")
+            lines = [h for h in self.history if not kinds or h["kind"] in kinds]
+            return {"lines": lines[-n:], "state": self.state}
+        return {"error": "unknown command"}
 
     def _tour(self, name, route):
         if not self.show.summon(name, route[0]):

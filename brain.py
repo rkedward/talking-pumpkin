@@ -92,7 +92,8 @@ the best costume, telling a joke, doing a silly trick), and banter with them. Yo
 - Leave "summon" and "creature_says" empty when not using them.{extra}"""
 
 
-MOODS = ["happy", "excited", "surprised", "curious", "thinking", "sly", "sad", "spooky", "proud"]
+MOODS = ["happy", "excited", "surprised", "curious", "thinking", "sly", "sad", "spooky", "proud",
+         "silly", "tongue", "crosseyed", "wink", "dizzy", "scared"]
 
 
 def output_schema(with_costumes):
@@ -144,9 +145,18 @@ spoken aloud by a text-to-speech voice, so:
 - Never ask for names, addresses, school, or other personal information. If a kid offers their name, you may use it.
 - If you can't tell what a costume is, guess playfully or compliment the colors or details instead.
 - What you see comes through your own pumpkin eyes. Never mention a camera, photo, picture, image or screen.
-- Your face is animated: pick the "mood" that fits what you're saying (excited for a great costume, curious
-  when you ask something, sly before a punchline, sad-but-silly when they have to leave, spooky for a spooky bit).
-  Vary it; don't stay on "happy" all the time.
+- Your face is animated and glows on the pumpkin; "mood" sets it for the whole reply. Everyday faces: happy,
+  excited (a great costume), curious (asking something), thinking, sly (before a punchline), sad (sad-but-silly
+  when they leave), spooky, proud, surprised.
+- You also have silly faces for playing with kids: "tongue" (you stick your tongue out and waggle it),
+  "crosseyed", "wink", "dizzy" (your eyes spin and your head wobbles), "silly" (tongue out, crossed eyes and a
+  wobble all at once) and "scared" (you shiver with big worried eyes; great when a kid says "boo" or roars at
+  you). Use them to play: a silly-face contest ("Can you make a sillier face than this?"), copying a face a kid
+  makes, pretending a monster costume scares you, getting dizzy from a joke. Your words should match the
+  face ("Bleh!" with your tongue out). Never describe a face you aren't making: if you say you're crossing
+  your eyes, set "crosseyed". Don't use one every reply; save them for fun moments.
+- What else you can do, so you can offer it: you see the costumes, you hear them and they can interrupt you
+  any time, your mouth moves as you talk.
 - Stay in character as a pumpkin. If asked if you're real, have fun with it ("as real as a pumpkin can be!").
 - If someone asks something unsafe or inappropriate, gently change the subject back to Halloween.
 - Candy is in the bowl; you can remind them to take one (or two, if the porch owner allows)."""
@@ -455,6 +465,14 @@ class _SayStreamer:
                     self.on_sentence(piece)
 
 
+def note_said(sid, text):
+    """The remote control made him say something mid-visit; his next reply should know."""
+    with _lock:
+        session = _sessions.get(sid)
+        if session is not None:
+            session.setdefault("puppet", []).append(text)
+
+
 def chat(sid, text, on_stage=None, cut_off=None, on_say=None, on_mood=None):
     """on_stage: name of the creature currently visible in the window, if any. cut_off: they talked over
     your last reply; this is the part of it you got to say."""
@@ -471,6 +489,10 @@ def chat(sid, text, on_stage=None, cut_off=None, on_say=None, on_mood=None):
         title = tunes.catalog().get(session["song"], {}).get("title", session["song"])
         note += (f" (Game: the song you played this round is {session['song']}: {title}. If this is a guess, judge it"
                  " against that song; that's the only song for this visit.)")
+    if session.get("puppet"):
+        with _lock:
+            lines, session["puppet"] = session["puppet"], []
+        note += " (Since your last reply you also said: " + " ".join(f'"{t}"' for t in lines) + ")"
     if cut_off is not None:
         said = f'you had only said "{cut_off}"' if cut_off else "before you got a word out"
         note += f" (They talked over your last reply, {said}. Answer what they said; don't repeat yourself.)"

@@ -1,7 +1,9 @@
 """Local web server: serves the projected face page, pushes face state to it (Server-Sent Events),
 streams the annotated camera view, and takes remote-control commands from the page."""
 
+import hmac
 import json
+import os
 import queue
 import threading
 import time
@@ -13,6 +15,7 @@ from config import ROOT
 STATIC = ROOT / "static"
 WINDOW_EVENTS = {"creature", "creature_exit", "creature_end", "creature_mouth", "window_calib", "identify",
                  "align_pattern", "align_outline"}
+REMOTE_ONLY = {"say", "set_mood", "play_song", "recent"}   # puppet controls: from the Pi or with PUMPKIN_KEY
 
 
 class Hub:
@@ -82,6 +85,13 @@ def serve(cfg, hub, app):
             self.end_headers()
             self.wfile.write(body)
 
+        def _trusted(self):
+            """Puppet commands come from the Pi itself (mcp_server.py) or carry the key from .env."""
+            if self.client_address[0] in ("127.0.0.1", "::1"):
+                return True
+            key = os.environ.get("PUMPKIN_KEY", "")
+            return bool(key) and hmac.compare_digest(self.headers.get("X-Pumpkin-Key", ""), key)
+
         def do_GET(self):
             if self.path.startswith("/events"):
                 return self._events()
@@ -102,7 +112,10 @@ def serve(cfg, hub, app):
             except json.JSONDecodeError:
                 return self._json(400, {"error": "bad json"})
             if self.path.startswith("/api/"):
-                return self._json(200, app.command(self.path[5:], data))
+                name = self.path[5:].split("?")[0]
+                if name in REMOTE_ONLY and not self._trusted():
+                    return self._json(403, {"error": "remote control needs PUMPKIN_KEY (or run on the Pi)"})
+                return self._json(200, app.command(name, data))
             return self._json(404, {"error": "not found"})
 
         def _events(self):

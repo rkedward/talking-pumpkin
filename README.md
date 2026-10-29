@@ -233,6 +233,29 @@ automation:
           entity_id: light.porch
 ```
 
+### Add-on: AI assistant remote control (MCP)
+
+Let an AI assistant drive the pumpkin: "make the pumpkin say 'Nice Spider-Man costume!' with his tongue out",
+"play the song game", "end the visit", "what did the kids ask him tonight?", "is he OK?". `mcp_server.py` is
+an [MCP](https://modelcontextprotocol.io) server with tools to say something (with a face), set his face,
+greet, end a visit, pass him a question, play a song, change the volume, mute the mic, check his status, read
+the conversation and log, see the camera, run the echo test and send the ghost on a tour. He still chats with
+visitors on his own; this is for stepping in. Whatever he says mid-visit, his next reply knows about.
+
+On the Pi, with the pumpkin running, add it to Claude Code:
+
+```bash
+cd ~/pumpkin && .venv/bin/pip install "mcp>=2.3"
+claude mcp add pumpkin -- ~/pumpkin/.venv/bin/python ~/pumpkin/mcp_server.py
+```
+
+From Claude Desktop on a laptop, start it over SSH (in its MCP settings):
+`"pumpkin": {"command": "ssh", "args": ["you@pumpkin.local", "~/pumpkin/.venv/bin/python", "~/pumpkin/mcp_server.py"]}`
+
+It talks over stdio and opens nothing new to the network. The puppet commands on the web API (`/api/say`,
+`/api/set_mood`, `/api/play_song`, `/api/recent`) only answer the Pi itself, or a request carrying the
+`X-Pumpkin-Key` header that matches `PUMPKIN_KEY` in `.env`. Don't expose the web port to the internet.
+
 ### Add-on: Fog and lights
 
 A puff of fog and a flash of lights when kids arrive. Use a plug-in power relay for lights (no mains
@@ -340,6 +363,7 @@ Open http://localhost:8000 (add `?debug` for the panel). On Linux install `libpo
 | `brain.py` | Claude prompts: costume greeting and Q&A. |
 | `home.py` | Home automation: doorbell in, webhooks out. |
 | `web.py` | Serves the face page, live state, camera view and remote-control commands. |
+| `mcp_server.py` | Remote control for AI assistants (MCP): say, faces, songs, greet, status, conversation, camera. |
 | `align.py`, `static/warp.js` | Auto-alignment from a phone photo: pattern, marker detection, keystone fit. |
 | `static/` | The projected face (`face.js`) and debug panel (`app.js`). |
 | `install_pi.sh`, `kiosk.sh` | Pi installer and full-screen browser launcher. |
