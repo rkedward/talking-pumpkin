@@ -44,7 +44,6 @@ WRAPUPS = [
 SILLY_FACES = {"silly", "tongue", "crosseyed", "wink", "dizzy", "scared"}
 FLASH_BEAT_S = 1.2   # a silly face shows this long before he starts talking (the face page flashes it 1.5 s)
 NUDGES = ["Hello? Are you still there?", "Helloooo? Anybody still there?", "Did you sneak off with my candy? Are you still there?"]
-BYE_RE = re.compile(r"\b(bye|goodbye|see you|see ya|gotta go|got to go|we have to go)\b", re.I)
 GOODBYES = ["Bye bye! Happy Halloween! Ho ho ho!", "See you later, alligator! Happy haunting!", "Bye bye! Hee hee, that was fun!"]
 BUTLER_LINES = [
     "Ding dong! Visitors, sir! Allow me to get the lights.",
@@ -533,6 +532,9 @@ class Pumpkin:
                 nudged = False
                 self.log(f"👂 {heard}", "heard")
                 timing, self.listener.timing = self.listener.timing, {}
+                if self._bye_re.search(heard):   # they said goodbye: wave them off right away
+                    self.say(random.choice(GOODBYES))
+                    break
             heard_at = time.time()
             self.set_state("thinking")
             on_stage = self.show.active() if self.show else None
@@ -576,8 +578,6 @@ class Pumpkin:
             brain_thread.join(timeout=10)
             pending_look = self.sound and reply.get("look") and not last
             if last and not reply.get("play_song"):   # that reply was his goodbye
-                break
-            if self.sound and heard and BYE_RE.search(heard):   # they said goodbye, and he said it back
                 break
             self.sideshow(reply)
             if reply.get("play_song") and not self.abort_visit:
@@ -773,6 +773,11 @@ class Pumpkin:
         finally:
             if was and not self.visit_active:
                 self.idle_show(True)
+
+    @property
+    def _bye_re(self):
+        words = [w.lower() for w in self.cfg["visit"]["bye_words"]]
+        return re.compile(r"\b(" + "|".join(re.escape(w).replace(r"\ ", r"[\s,.-]*") for w in words) + r")\b", re.I)
 
     def _run_sound(self):
         """Sound-triggered visits: wait for a "trick or treat" / hello, a knock, the doorbell or the remote."""

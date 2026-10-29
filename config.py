@@ -51,9 +51,9 @@ DEFAULTS = {
         # remote's Greet); the camera only takes a picture for costumes and never tracks. "camera" = the old way:
         # person detection starts the visit, the eyes follow people, and the visit ends when they walk away.
         "trigger": "sound",
-        "wake_words": ["trick or treat", "treat", "hello", "hi", "hey", "happy halloween", "boo", "pumpkin",
-                       "knock knock", "knock", "anybody home", "anyone home"],
-        "wake_on": "any",             # any = anyone talking near him (the mic array's voice light + real words);
+        "wake_words": ["trick or treat", "hello", "knock", "doorbell", "door bell", "ding dong"],
+        "bye_words": ["goodbye", "good bye", "bye", "adios", "adiós"],   # a visitor saying one of these ends the visit
+        "wake_on": "words",           # any = anyone talking near him (the mic array's voice light + real words);
                                       # words = only the wake_words above
         "wake_stt": "cloud",          # cloud = the accurate speech-to-text (what's said near him before a visit goes
                                       # to OpenAI too); local = whisper on the Pi (private, mishears more)
