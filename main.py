@@ -735,8 +735,8 @@ class Pumpkin:
 
         def is_wake(text):
             found = [m.group(0) for m in wake_re.finditer(text.lower())]
-            if self._idle_playing and self._lyrics:   # the song's own words leaking through don't count
-                found = [w for w in found if w not in self._lyrics]
+            if self._idle_playing:   # the song leaking through doesn't count: its words, or "knock" (its beat)
+                found = [w for w in found if w not in self._lyrics and "knock" not in w]
                 if not found and text:
                     self.log(f"(ignored, sounds like the song: {text!r})", "info")
             return bool(found)
