@@ -776,7 +776,25 @@ class Pumpkin:
         words = [w.lower() for w in v["wake_words"]]
         wake_re = re.compile(r"\b(" + "|".join(re.escape(w).replace(r"\ ", r"[\s,.-]*") for w in words) + r")\b")
 
+        wake_any = str(v["wake_on"]).lower() == "any"
+        # Who writes down what's said before a visit: the cloud (accurate) or whisper on the Pi (private).
+        wake_stt = self.listener.stt if str(v["wake_stt"]).lower() == "cloud" else self.local_stt
+        self.log(f"wake-up: {'anyone talking' if wake_any else 'wake words'}"
+                 f"{', heard by the mic array' if self._array_voice() else ''}, transcribed "
+                 f"{'in the cloud' if not getattr(wake_stt, 'local', False) else 'on the Pi'}")
+        lyric_word = re.compile(r"[a-z']+")
+
         def is_wake(text):
+            if wake_any:   # any real words from someone near the pumpkin (unless it's the song leaking through)
+                words = lyric_word.findall(text.lower())
+                if not words:
+                    return False
+                if self._idle_playing:
+                    near = set(lyric_word.findall(self._lyrics_near()))
+                    if near and sum(w in near for w in words) >= max(1, 0.6 * len(words)):
+                        self.log(f"(ignored, sounds like the song: {text!r})", "info")
+                        return False
+                return True
             found = [m.group(0) for m in wake_re.finditer(text.lower())]
             if self._idle_playing and found:   # the song leaking through doesn't count: what it's singing now
                 near = self._lyrics_near()
@@ -791,9 +809,9 @@ class Pumpkin:
             self.set_state("idle")
             self.idle_show(True)
             got = self.listener.wait_for_visitor(lambda: self.force_greet or not self.typed.empty(), is_wake,
-                                                 stt=self.local_stt, knock=bool(v["knock"]),
+                                                 stt=wake_stt, knock=bool(v["knock"]),
                                                  knock_ratio=float(v["knock_ratio"]), knocks=int(v["knocks"]),
-                                                 music=lambda: self._idle_playing)
+                                                 music=lambda: self._idle_playing, voice=self._array_voice())
             trigger, said = got if got else ("remote", None)
             if trigger == "remote" and not self.force_greet and not self.typed.empty():
                 trigger, said = "words", self.typed.get_nowait()
@@ -803,6 +821,12 @@ class Pumpkin:
             self.visit(True, trigger, said)
             self.set_state("cooldown")
             time.sleep(float(v["cooldown_s"]))   # 0 = listen for the next group right away
+
+    def _array_voice(self):
+        """The mic array's own voice-activity light, if it has one (it ignores the speaker and typing)."""
+        if not (self.doa and self.doa.available) or not self.cfg["visit"].get("use_array_vad", True):
+            return None
+        return lambda: time.time() - self.doa.voice_at < 0.6
 
     def _heard_voice(self):
         self.last_activity = time.time()

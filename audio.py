@@ -100,6 +100,14 @@ class Microphone:
             self.frames.get_nowait()
 
 
+def _thump(frame, rate=16000):
+    """A knock on a door is a low thump; typing and clicks are mostly high-pitched."""
+    spec = np.abs(np.fft.rfft(frame.astype(np.float32))) ** 2
+    hz = np.fft.rfftfreq(len(frame), 1 / rate)
+    total = spec[hz > 40].sum()
+    return total > 0 and spec[(hz > 40) & (hz < 500)].sum() / total > 0.35
+
+
 class Listener:
     """Waits for one utterance using an adaptive energy threshold, then transcribes it."""
 
@@ -188,20 +196,22 @@ class Listener:
 
     # ---- waiting for a visitor (sound-triggered visits) -------------------------------------------------
     def wait_for_visitor(self, should_stop, is_wake, stt=None, knock=True, knock_ratio=8.0, knocks=2,
-                         music=lambda: False):
+                         music=lambda: False, voice=None):
         """Between visits: listen for a short greeting ("trick or treat", "hello") or a knock on the door.
         Short voiced bursts are transcribed with `stt` (the Pi's own whisper, so nothing leaves the porch
         before a visit) and checked with is_wake(text). Returns ("words", text), ("knock", None), or None
         when should_stop() says so. While music() is true (his idle video's soundtrack is playing), speech and
         knocks must also be clearly louder than what's left of the music after echo cancelling (learned the
-        same way barge-in learns his voice's echo)."""
+        same way barge-in learns his voice's echo). voice(), when given, is the mic array's own "someone is
+        speaking" light: it ignores the speaker and clicks like typing, so speech only counts while it's on
+        (and then the music's echo doesn't need to be beaten)."""
         stt = stt or self.stt
         frame_s = Microphone.FRAME_S
         margin = float(self.cfg["barge_echo_margin"])
         self.mic.flush()
         pre_roll, voiced, chunks, silent, speech = [], [], [], 0, False
         burst, hits, clock = 0, [], 0.0   # knock: how long the current loud burst is; times of short bursts
-        prev, refs, loudest, report = self.noise, [], 0.0, 10.0
+        prev, refs, loudest, report, peak = self.noise, [], 0.0, 10.0, 0.0
         while not should_stop():
             if not self.mic.ok or stt is None:
                 time.sleep(0.1)
@@ -234,26 +244,29 @@ class Listener:
                 # A knock is a sharp, short thump: a jump far above the room noise (and the music's echo) that's
                 # over in <= 90 ms.
                 floor = max(self.noise * knock_ratio, float(self.cfg["min_rms"]) * 3, echo * margin * 1.5)
-                sharp = rms > floor and rms > prev * 3
+                sharp = rms > floor and rms > prev * 3 and _thump(frame) and not (voice and voice())
                 if burst:
                     if rms > max(self.noise * knock_ratio * 0.4, float(self.cfg["min_rms"]), echo * margin):
                         burst += 1
                     else:
                         if burst <= 3:
+                            if self.log:
+                                self.log(f"(knock? peak {peak:.0f}, needs {floor:.0f})", "info")
                             hits = [t for t in hits if now - t < 1.5] + [now]
                             if len(hits) >= knocks and hits[-1] - hits[0] >= 0.12:
                                 return ("knock", None)
                         burst = 0
                 elif sharp:
-                    burst = 1
+                    burst, peak = 1, rms
                 prev = rms
-            loud = rms > max(self.noise * float(self.cfg["start_ratio"]), float(self.cfg["min_rms"]), echo * margin)
+            basic = max(self.noise * float(self.cfg["start_ratio"]), float(self.cfg["min_rms"]))
+            loud = rms > (basic if voice else max(basic, echo * margin))
             if not speech:
                 pre_roll = (pre_roll + [frame])[-10:]
                 voiced = voiced + [frame] if loud else []
                 if not loud and not refs:   # room noise is measured between songs, not from the music's echo
                     self.noise = 0.95 * self.noise + 0.05 * rms
-                if len(voiced) >= 5:   # a bit longer than normal listening: knocks and clatter aren't words
+                if len(voiced) >= 5 and (voice is None or voice()):   # knocks, clatter and typing aren't words
                     speech, silent, chunks = True, 0, list(pre_roll)
             else:
                 chunks.append(frame)

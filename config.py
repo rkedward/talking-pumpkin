@@ -53,6 +53,11 @@ DEFAULTS = {
         "trigger": "sound",
         "wake_words": ["trick or treat", "treat", "hello", "hi", "hey", "happy halloween", "boo", "pumpkin",
                        "knock knock", "knock", "anybody home", "anyone home"],
+        "wake_on": "any",             # any = anyone talking near him (the mic array's voice light + real words);
+                                      # words = only the wake_words above
+        "wake_stt": "cloud",          # cloud = the accurate speech-to-text (what's said near him before a visit goes
+                                      # to OpenAI too); local = whisper on the Pi (private, mishears more)
+        "use_array_vad": True,        # speech only counts while the mic array's own voice light is on
         "knock": True,                # a knock on the door starts a visit too
         "knock_ratio": 8.0,           # how far above the room's noise a knock must jump (higher = less sensitive)
         "knocks": 2,                  # knocks within 1.5 s that count ("knock knock")
