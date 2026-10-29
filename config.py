@@ -43,8 +43,8 @@ DEFAULTS = {
         "gone_s": 3.5,                # nobody seen this long = visit over
         "max_turns": 3,
         "max_visit_s": 45,
-        "game_extra_turns": 3,        # a visit that plays the song game gets this many more turns ...
-        "game_extra_s": 40,           # ... and this much more time
+        "game_extra_turns": 2,        # a visit that plays the song game gets this many more turns ...
+        "game_extra_s": 30,           # ... and this much more time
         "listen_s": 8,                # how long to wait for each question
         "regreet_s": 12,
         # What starts a visit: "sound" = someone says hello / trick or treat, knocks, rings the doorbell (or the

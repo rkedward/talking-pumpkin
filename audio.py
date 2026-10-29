@@ -318,6 +318,20 @@ class Listener:
 # --------------------------------------------------------------------------------------------- STT
 
 _HALLUCINATIONS = {"", "you", "thank you.", "thanks for watching!", "thank you for watching.", ".", "bye."}
+STT_PROMPT = "Kids trick-or-treating on Halloween talking to a jack-o'-lantern."
+
+
+def _clean_transcript(text):
+    """Drop what isn't words someone said: sound tags like [knock] or (laughs), and the recognizer echoing
+    its own prompt back on noise."""
+    text = re.sub(r"\[[^\]]*\]|\([^)]*\)|\*[^*]*\*", " ", text or "")
+    text = re.sub(r"\s+", " ", text).strip()
+    words = " ".join(re.findall(r"[a-z]+", text.lower()))
+    if len(words.split()) >= 3 and f" {words} " in " " + " ".join(re.findall(r"[a-z]+", STT_PROMPT.lower())) + " ":
+        return ""   # three or more words straight out of the prompt: an echo, not a kid
+    if text.lower() in _HALLUCINATIONS or re.fullmatch(r"[\W_]*", text):
+        return ""
+    return text
 
 
 class WhisperSTT:
@@ -340,11 +354,9 @@ class WhisperSTT:
         started = time.time()
         segments, _ = self.model.transcribe(
             audio, language="en", beam_size=1, condition_on_previous_text=False,
-            initial_prompt="Kids trick-or-treating on Halloween talking to a jack-o'-lantern.")
+            initial_prompt=STT_PROMPT)
         parts = [s.text for s in segments if s.no_speech_prob < 0.6 and s.avg_logprob > -1.2]
-        text = " ".join(p.strip() for p in parts).strip()
-        if text.lower() in _HALLUCINATIONS or re.fullmatch(r"[\W_]*", text):
-            text = ""
+        text = _clean_transcript(" ".join(p.strip() for p in parts))
         self.log(f"(heard in {time.time() - started:.1f}s: {text!r})")
         return text
 
@@ -383,8 +395,7 @@ class OpenAISTT:
                 self.log(f"speech recognition: OpenAI failed ({exc} {detail}); using whisper")
                 self.warned = time.time()
             return self.backup.transcribe(audio, rate)
-        if text.lower() in _HALLUCINATIONS or re.fullmatch(r"[\W_]*", text):
-            text = ""
+        text = _clean_transcript(text)
         self.log(f"(heard in {time.time() - started:.1f}s: {text!r})")
         return text
 
@@ -396,7 +407,7 @@ class OpenAISTT:
             w.setframerate(int(rate))
             w.writeframes((np.clip(audio, -1, 1) * 32767).astype(np.int16).tobytes())
         fields = {"model": self.model, "language": "en", "response_format": "json",
-                  "prompt": "Kids trick-or-treating on Halloween talking to a jack-o'-lantern."}
+                  "prompt": STT_PROMPT}
         headers = {"Authorization": f"Bearer {self.key}"}
         if self.http:   # keeps the connection open between turns (saves ~0.3 s a call)
             r = self.http.post("https://api.openai.com/v1/audio/transcriptions", headers=headers, data=fields,
